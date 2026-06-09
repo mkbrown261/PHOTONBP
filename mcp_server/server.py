@@ -3,7 +3,7 @@
 UEOS — Unreal Engine Operating System
 MCP Server Entry Point — Phase 2
 
-Version: 2.0.0
+Version: 2.0.1
 
 Connects Claude Desktop to Unreal Engine 5.4 via:
   - Remote Control API (HTTP, port 30010)
@@ -18,12 +18,13 @@ Phase 2 tools registered:
   Niagara     20 tools
   Inspection  12 tools
   Scene       16 tools
-  Data        15 tools  ← new Phase 2
+  Data        15 tools
   ─────────────────────
   Subtotal    94 UE tools
   Pipeline     8 extra tools (Tripo/Huanyuan/MetaTailor/status)
+  Diagnostics  3 tools
   ─────────────────────
-  Total      102 tools
+  Total      105 tools
 """
 
 import asyncio
@@ -35,7 +36,32 @@ from pathlib import Path
 
 # ── Environment ───────────────────────────────────────────────────────────────
 from dotenv import load_dotenv
-load_dotenv(Path(__file__).parent.parent / ".env")
+
+ENV_FILE = Path(__file__).parent.parent / ".env"
+load_dotenv(ENV_FILE)
+
+# ── First-run check: guide user to configure.py if keys are missing ───────────
+def _check_first_run():
+    """
+    If .env is missing or Tripo key is blank, print a helpful message.
+    Server still starts — tools that need keys will return a clear error.
+    """
+    if not ENV_FILE.exists():
+        print("=" * 55, flush=True)
+        print("  UEOS: No .env file found.", flush=True)
+        print("  Run: python setup/configure.py", flush=True)
+        print("=" * 55, flush=True)
+        return
+
+    tripo_key = os.getenv("TRIPO_API_KEY", "").strip()
+    if not tripo_key:
+        print("=" * 55, flush=True)
+        print("  UEOS: Tripo API key not configured.", flush=True)
+        print("  Run: python setup/configure.py --tripo", flush=True)
+        print("  3D generation tools will return errors until set.", flush=True)
+        print("=" * 55, flush=True)
+
+_check_first_run()
 
 # ── MCP ───────────────────────────────────────────────────────────────────────
 from mcp.server import Server
@@ -433,12 +459,22 @@ async def handle_status() -> list[types.TextContent]:
     except Exception as e:
         status["metatailor"]["error"] = str(e)
 
+    tripo_configured    = bool(os.getenv("TRIPO_API_KEY", "").strip())
+    huanyuan_configured = bool(os.getenv("HUANYUAN_API_KEY", "").strip())
+    metatailor_configured = bool(os.getenv("METATAILOR_API_KEY", "").strip())
+
     lines = [
         "═══════════════════════════════════════════",
         "  UEOS v2.0 — Unreal Engine Operating System",
-        "  Phase 2 Complete: 102 tools registered",
+        "  Phase 2 Complete: 105 tools registered",
         "═══════════════════════════════════════════",
     ]
+    if not tripo_configured:
+        lines.append("  ⚠  Tripo key not set — run: python setup/configure.py --tripo")
+    if not huanyuan_configured:
+        lines.append("  ○  Huanyuan3D key not set (optional)")
+    if not metatailor_configured:
+        lines.append("  ○  MetaTailor key not set (optional)")
     icons = {True: "●", False: "○"}
     for svc, info in status.items():
         c = info.get("connected", False)
@@ -504,7 +540,21 @@ async def handle_batch_execute(args: dict) -> list[types.TextContent]:
     }, indent=2))]
 
 
+def _require_key(service: str, key: str) -> list[types.TextContent] | None:
+    """Return an error TextContent if key is missing, else None."""
+    if not key or not key.strip():
+        setup_cmd = f"python setup/configure.py --{service.lower()}" if service.lower() == "tripo" else "python setup/configure.py"
+        return [types.TextContent(type="text", text=json.dumps({
+            "error":   f"{service} API key not configured.",
+            "fix":     f"Run: {setup_cmd}",
+            "details": f"Add your {service} API key to the .env file or run the config wizard."
+        }))]
+    return None
+
+
 async def handle_tripo_text(args: dict) -> list[types.TextContent]:
+    if err := _require_key("Tripo", os.getenv("TRIPO_API_KEY", "")):
+        return err
     prompt      = args["prompt"]
     style       = args.get("style", "realistic")
     texture     = args.get("texture", True)
@@ -525,6 +575,8 @@ async def handle_tripo_text(args: dict) -> list[types.TextContent]:
 
 
 async def handle_tripo_image(args: dict) -> list[types.TextContent]:
+    if err := _require_key("Tripo", os.getenv("TRIPO_API_KEY", "")):
+        return err
     import base64
     image_path  = args.get("image_path")
     image_url   = args.get("image_url")
@@ -556,6 +608,8 @@ async def handle_tripo_image(args: dict) -> list[types.TextContent]:
 
 
 async def handle_tripo_status(args: dict) -> list[types.TextContent]:
+    if err := _require_key("Tripo", os.getenv("TRIPO_API_KEY", "")):
+        return err
     task_id = args["task_id"]
     task    = await tripo.get_task(task_id)
     result  = {
@@ -574,6 +628,8 @@ async def handle_tripo_status(args: dict) -> list[types.TextContent]:
 
 
 async def handle_tripo_import(args: dict) -> list[types.TextContent]:
+    if err := _require_key("Tripo", os.getenv("TRIPO_API_KEY", "")):
+        return err
     import aiohttp
     task_id          = args["task_id"]
     import_path      = args.get("import_path", "/Game/UEOS/Generated")
@@ -643,6 +699,8 @@ print("UEOS_RESULT:" + str(t.imported_object_paths))
 
 
 async def handle_huanyuan_image(args: dict) -> list[types.TextContent]:
+    if err := _require_key("Huanyuan3D", os.getenv("HUANYUAN_API_KEY", "")):
+        return err
     image_path  = args.get("image_path")
     image_url   = args.get("image_url")
     steps       = args.get("steps", 50)
@@ -665,6 +723,8 @@ async def handle_huanyuan_image(args: dict) -> list[types.TextContent]:
 
 
 async def handle_metatailor_rig(args: dict) -> list[types.TextContent]:
+    if err := _require_key("MetaTailor", os.getenv("METATAILOR_API_KEY", "")):
+        return err
     mesh_path            = args.get("mesh_path")
     ue_asset_path        = args.get("ue_asset_path")
     add_clothing         = args.get("add_clothing", False)
