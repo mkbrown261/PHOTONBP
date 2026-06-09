@@ -1,0 +1,18 @@
+{
+  "_comment": "Add the mcpServers block to your existing claude_desktop_config.json",
+  "_locations": {
+    "windows": "%APPDATA%\\Claude\\claude_desktop_config.json",
+    "macos": "~/Library/Application Support/Claude/claude_desktop_config.json"
+  },
+  "mcpServers": {
+    "ueos": {
+      "command": "python",
+      "args": [
+        "C:\\UEOS\\mcp_server\\server.py"
+      ],
+      "env": {
+        "PYTHONPATH": "C:\\UEOS\\mcp_server"
+      }
+    }
+  }
+}

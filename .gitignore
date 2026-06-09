@@ -1,0 +1,42 @@
+# Environment / secrets
+.env
+.env.local
+*.env
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+.venv/
+venv/
+env/
+.Python
+pip-log.txt
+
+# Logs
+logs/
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Temp / cache
+.cache/
+tmp/
+temp/
+*.tmp
+
+# Node (for any tooling)
+node_modules/
+
+# UE generated
+Saved/
+Intermediate/
+DerivedDataCache/
