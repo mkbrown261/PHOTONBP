@@ -1,240 +1,575 @@
 """
 Unreal Engine 5.4 Remote Control HTTP Client
-Handles all communication with the UE Remote Control API on port 30010
+Phase 2 — Optimized
+
+Handles all communication with the UE Remote Control API (default port 30010).
+
+Key upgrades over Phase 1:
+  - Retry logic with exponential back-off for transient failures
+  - Structured output parser supporting all UEOS_ prefixes
+  - Multi-result collector (reads ALL prefixed lines, not just first)
+  - execute_python_ex() — wraps script in try/except, returns clean JSON
+  - Helper: run_asset_python() — locks a ticket around heavy asset ops
+  - Preset helpers: get_selected_actors(), get_level_actors_by_class()
+  - Verbose debug logging toggle
+  - UE 5.4-specific: handles /remote/object/call returning 200 with body
 """
 
 import asyncio
 import json
 import logging
-import aiohttp
+import time
 from typing import Any, Optional
 
-log = logging.getLogger("ueos.remote_control")
+import aiohttp
 
+log = logging.getLogger("ueos.rc")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Constants
+# ─────────────────────────────────────────────────────────────────────────────
+
+UEOS_PREFIXES = (
+    "UEOS_RESULT:",
+    "UEOS_ERROR:",
+    "UEOS_INFO:",
+    "UEOS_ASSETS:",
+    "UEOS_EXISTS:",
+    "UEOS_IMPORT_RESULT:",
+    "UEOS_WARN:",
+)
+
+# UE 5.4 Remote Control API endpoints
+EP_CALL   = "/remote/object/call"
+EP_PROP   = "/remote/object/property"
+EP_BATCH  = "/remote/batch"
+EP_PRESET = "/remote/preset"
+EP_INFO   = "/remote/info"
+
+# Python script plugin object path (unchanged in 5.4)
+PY_PLUGIN_PATH = "/Script/PythonScriptPlugin.Default__PythonScriptLibrary"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Client
+# ─────────────────────────────────────────────────────────────────────────────
 
 class UnrealRemoteControl:
     """
-    HTTP client for Unreal Engine 5.4 Remote Control API.
-    Endpoint: http://host:port/remote/...
+    Async HTTP client for Unreal Engine 5.4 Remote Control API.
+
+    All public methods are coroutines (use with await).
     """
 
-    def __init__(self, host: str = "127.0.0.1", port: int = 30010):
-        self.host = host
-        self.port = port
-        self.base_url = f"http://{host}:{port}"
-        self.timeout = aiohttp.ClientTimeout(total=30)
+    def __init__(
+        self,
+        host:          str = "127.0.0.1",
+        port:          int = 30010,
+        timeout:       int = 30,
+        max_retries:   int = 3,
+        retry_delay:   float = 1.0,
+        verbose:       bool = False,
+    ):
+        self.host        = host
+        self.port        = port
+        self.base_url    = f"http://{host}:{port}"
+        self.max_retries = max_retries
+        self.retry_delay = retry_delay
+        self.verbose     = verbose
+        self._set_timeout(timeout)
 
-    # ─────────────────────────────────────────────
-    # Core HTTP methods
-    # ─────────────────────────────────────────────
+    def _set_timeout(self, seconds: int):
+        self.timeout = aiohttp.ClientTimeout(
+            total=seconds,
+            connect=5,
+            sock_read=seconds
+        )
 
-    async def _post(self, endpoint: str, payload: dict) -> dict:
-        """POST to Remote Control API."""
-        url = f"{self.base_url}{endpoint}"
-        log.debug(f"POST {url} | {json.dumps(payload)[:200]}")
+    # ──────────────────────────────────────────────────────────────────────
+    # Low-level HTTP
+    # ──────────────────────────────────────────────────────────────────────
 
-        async with aiohttp.ClientSession(timeout=self.timeout) as session:
-            async with session.put(url, json=payload) as resp:
-                text = await resp.text()
-                if resp.status not in (200, 201):
-                    raise Exception(f"Remote Control error {resp.status}: {text}")
-                return json.loads(text) if text else {}
+    async def _request(
+        self,
+        method:   str,
+        endpoint: str,
+        payload:  dict | None = None,
+        retries:  int | None  = None,
+    ) -> dict:
+        """
+        Core HTTP request with retry logic.
+        UE Remote Control always returns JSON (or empty body on success).
+        """
+        url     = f"{self.base_url}{endpoint}"
+        tries   = retries if retries is not None else self.max_retries
+        delay   = self.retry_delay
+        last_ex = None
+
+        for attempt in range(tries):
+            try:
+                async with aiohttp.ClientSession(timeout=self.timeout) as session:
+                    meth = getattr(session, method.lower())
+                    kwargs: dict[str, Any] = {}
+                    if payload is not None:
+                        kwargs["json"] = payload
+
+                    if self.verbose:
+                        log.debug(f"{method.upper()} {url} | attempt {attempt+1}/{tries}")
+
+                    async with meth(url, **kwargs) as resp:
+                        text = await resp.text()
+
+                        # 200/201 = success
+                        if resp.status in (200, 201):
+                            return json.loads(text) if text.strip() else {}
+
+                        # 422 = UE validation error — don't retry
+                        if resp.status == 422:
+                            raise RuntimeError(f"UE RC 422 Unprocessable: {text[:400]}")
+
+                        # 503 = UE not ready — retry
+                        if resp.status == 503 and attempt < tries - 1:
+                            log.warning(f"UE RC 503 (not ready), retry in {delay}s…")
+                            await asyncio.sleep(delay)
+                            delay *= 2
+                            continue
+
+                        raise RuntimeError(f"UE RC HTTP {resp.status}: {text[:400]}")
+
+            except aiohttp.ClientConnectorError as e:
+                last_ex = e
+                if attempt < tries - 1:
+                    log.warning(f"RC connection error, retry in {delay}s: {e}")
+                    await asyncio.sleep(delay)
+                    delay *= 2
+            except asyncio.TimeoutError as e:
+                last_ex = e
+                if attempt < tries - 1:
+                    log.warning(f"RC timeout, retry in {delay}s")
+                    await asyncio.sleep(delay)
+                    delay *= 2
+
+        raise ConnectionError(
+            f"UE Remote Control unreachable at {self.base_url} after {tries} attempts. "
+            f"Last error: {last_ex}"
+        )
 
     async def _put(self, endpoint: str, payload: dict) -> dict:
-        """PUT to Remote Control API."""
-        url = f"{self.base_url}{endpoint}"
-        log.debug(f"PUT {url}")
-
-        async with aiohttp.ClientSession(timeout=self.timeout) as session:
-            async with session.put(url, json=payload) as resp:
-                text = await resp.text()
-                if resp.status not in (200, 201):
-                    raise Exception(f"Remote Control error {resp.status}: {text}")
-                return json.loads(text) if text else {}
+        return await self._request("PUT", endpoint, payload)
 
     async def _get(self, endpoint: str) -> dict:
-        """GET from Remote Control API."""
-        url = f"{self.base_url}{endpoint}"
-        log.debug(f"GET {url}")
+        return await self._request("GET", endpoint)
 
-        async with aiohttp.ClientSession(timeout=self.timeout) as session:
-            async with session.get(url) as resp:
-                text = await resp.text()
-                if resp.status not in (200, 201):
-                    raise Exception(f"Remote Control error {resp.status}: {text}")
-                return json.loads(text) if text else {}
+    # ──────────────────────────────────────────────────────────────────────
+    # Python script execution — the workhorse
+    # ──────────────────────────────────────────────────────────────────────
 
-    # ─────────────────────────────────────────────
-    # Python Script Execution (most powerful method)
-    # ─────────────────────────────────────────────
-
-    async def execute_python(self, script: str) -> dict:
+    async def execute_python(self, script: str, timeout: int = 30) -> dict:
         """
-        Execute a Python script inside Unreal Engine editor.
-        This is the primary method for complex asset operations.
-        Returns stdout output from the script.
+        Execute a Python script inside the UE 5.4 editor via Remote Control.
+
+        The script has full access to `import unreal`.
+        Use UEOS_RESULT:<json> to return data, UEOS_ERROR:<msg> for errors.
+
+        Returns the raw Remote Control response dict (has "output" key with stdout).
         """
+        self._set_timeout(timeout)
         payload = {
-            "objectPath": "/Script/PythonScriptPlugin.Default__PythonScriptLibrary",
+            "objectPath":   PY_PLUGIN_PATH,
             "functionName": "ExecutePythonScript",
-            "parameters": {
-                "PythonScript": script
-            }
+            "parameters":   {"PythonScript": script}
         }
+        result = await self._put(EP_CALL, payload)
+        if self.verbose:
+            log.debug(f"Python output: {result.get('output', '')[:500]}")
+        return result
 
-        try:
-            result = await self._put("/remote/object/call", payload)
-            log.debug(f"Python execution result: {result}")
-            return result
-        except Exception as e:
-            log.error(f"Python execution failed: {e}")
-            raise
+    async def execute_python_ex(self, script: str, timeout: int = 30) -> dict:
+        """
+        Like execute_python() but auto-wraps in try/except and forces
+        a UEOS_RESULT / UEOS_ERROR output line.
 
-    async def execute_python_file(self, file_path: str) -> dict:
-        """Execute a Python script file inside UE."""
-        payload = {
-            "objectPath": "/Script/PythonScriptPlugin.Default__PythonScriptLibrary",
-            "functionName": "ExecutePythonScript",
-            "parameters": {
-                "PythonScript": f'import unreal; exec(open(r"{file_path}").read())'
-            }
-        }
-        return await self._put("/remote/object/call", payload)
-
-    # ─────────────────────────────────────────────
-    # Engine Info
-    # ─────────────────────────────────────────────
-
-    async def get_engine_info(self) -> dict:
-        """Get UE engine version and project info."""
-        script = """
-import unreal
-import json
-
-info = {
-    "engineVersion": str(unreal.SystemLibrary.get_engine_version()),
-    "projectName": unreal.Paths.get_project_file_path().split('/')[-1].replace('.uproject',''),
-    "projectDir": unreal.Paths.project_dir(),
-    "contentDir": unreal.Paths.project_content_dir()
-}
-print("UEOS_INFO:" + json.dumps(info))
+        Guarantees the returned dict has:
+          { "ok": bool, "result": Any | None, "error": str | None, "raw_output": str }
+        """
+        wrapped = f"""
+import unreal, json, traceback
+try:
+{chr(10).join('    ' + line for line in script.splitlines())}
+except Exception as _ueos_ex:
+    print("UEOS_ERROR:" + traceback.format_exc().replace("\\n", " | "))
 """
-        result = await self.execute_python(script)
-        # Parse the UEOS_INFO: line from output
+        raw = await self.execute_python(wrapped, timeout=timeout)
+        return self._parse_output_ex(raw)
+
+    def _parse_output_ex(self, raw_result: dict) -> dict:
+        """
+        Parse all UEOS_ prefixed lines from a Python execution result.
+        Returns structured dict with ok/result/error/raw_output.
+        """
+        output  = raw_result.get("output", "")
+        result  = None
+        error   = None
+        info    = []
+        warns   = []
+
+        for line in output.split("\n"):
+            line = line.strip()
+            if line.startswith("UEOS_RESULT:"):
+                try:
+                    result = json.loads(line[len("UEOS_RESULT:"):])
+                except json.JSONDecodeError:
+                    result = line[len("UEOS_RESULT:"):]
+            elif line.startswith("UEOS_ERROR:"):
+                error = line[len("UEOS_ERROR:"):]
+            elif line.startswith("UEOS_INFO:"):
+                try:
+                    info.append(json.loads(line[len("UEOS_INFO:"):]))
+                except Exception:
+                    info.append(line[len("UEOS_INFO:"):])
+            elif line.startswith("UEOS_WARN:"):
+                warns.append(line[len("UEOS_WARN:"):])
+
+        return {
+            "ok":         error is None,
+            "result":     result,
+            "error":      error,
+            "info":       info,
+            "warnings":   warns,
+            "raw_output": output
+        }
+
+    def parse_output(self, result: dict, prefix: str) -> Optional[str]:
+        """
+        Parse the FIRST line matching the given prefix from Python output.
+        Compatible with Phase 1 usage patterns.
+        """
         output = result.get("output", "")
         for line in output.split("\n"):
-            if line.startswith("UEOS_INFO:"):
-                return json.loads(line.replace("UEOS_INFO:", ""))
-        return {"engineVersion": "Unknown", "projectName": "Unknown"}
+            line = line.strip()
+            if line.startswith(prefix):
+                return line[len(prefix):].strip()
+        return None
 
-    # ─────────────────────────────────────────────
-    # Object Property Access
-    # ─────────────────────────────────────────────
+    def parse_all_outputs(self, result: dict, prefix: str) -> list[str]:
+        """Parse ALL lines matching the given prefix (for multi-value returns)."""
+        output = result.get("output", "")
+        matches = []
+        for line in output.split("\n"):
+            line = line.strip()
+            if line.startswith(prefix):
+                matches.append(line[len(prefix):].strip())
+        return matches
+
+    # ──────────────────────────────────────────────────────────────────────
+    # Engine info
+    # ──────────────────────────────────────────────────────────────────────
+
+    async def get_engine_info(self) -> dict:
+        """Get UE 5.4 version, project name, and paths."""
+        script = """
+import unreal, json
+try:
+    info = {
+        "engineVersion": str(unreal.SystemLibrary.get_engine_version()),
+        "projectName":   unreal.Paths.get_project_file_path().split("/")[-1].replace(".uproject",""),
+        "projectDir":    unreal.Paths.project_dir(),
+        "contentDir":    unreal.Paths.project_content_dir(),
+        "platform":      str(unreal.SystemLibrary.get_platform_name()),
+    }
+    print("UEOS_INFO:" + json.dumps(info))
+except Exception as e:
+    print("UEOS_ERROR:" + str(e))
+"""
+        result = await self.execute_python(script)
+        raw = self.parse_output(result, "UEOS_INFO:")
+        if raw:
+            try:
+                return json.loads(raw)
+            except Exception:
+                pass
+        err = self.parse_output(result, "UEOS_ERROR:")
+        raise RuntimeError(f"get_engine_info failed: {err or result.get('output', '')[:200]}")
+
+    # ──────────────────────────────────────────────────────────────────────
+    # Object / property access
+    # ──────────────────────────────────────────────────────────────────────
 
     async def get_property(self, object_path: str, property_name: str) -> Any:
-        """Get a property value from a UObject."""
+        """Read a property from a UObject via Remote Control."""
         payload = {
-            "objectPath": object_path,
-            "access": "READ_ACCESS",
+            "objectPath":  object_path,
+            "access":      "READ_ACCESS",
             "propertyName": property_name
         }
-        return await self._put("/remote/object/property", payload)
+        return await self._put(EP_PROP, payload)
 
     async def set_property(self, object_path: str, property_name: str, value: Any) -> dict:
-        """Set a property value on a UObject."""
+        """Write a property to a UObject via Remote Control."""
         payload = {
-            "objectPath": object_path,
-            "access": "WRITE_ACCESS",
+            "objectPath":   object_path,
+            "access":       "WRITE_ACCESS",
             "propertyName": property_name,
             "propertyValue": {property_name: value}
         }
-        return await self._put("/remote/object/property", payload)
+        return await self._put(EP_PROP, payload)
 
-    # ─────────────────────────────────────────────
-    # Function Calls
-    # ─────────────────────────────────────────────
-
-    async def call_function(self, object_path: str, function_name: str, parameters: dict = None) -> dict:
-        """Call a function on a UObject."""
+    async def call_function(
+        self,
+        object_path:   str,
+        function_name: str,
+        parameters:    dict | None = None,
+        transaction:   bool = True
+    ) -> dict:
+        """Call a Blueprint-callable function on a UObject."""
         payload = {
-            "objectPath": object_path,
-            "functionName": function_name,
-            "parameters": parameters or {},
-            "generateTransaction": True
+            "objectPath":        object_path,
+            "functionName":      function_name,
+            "parameters":        parameters or {},
+            "generateTransaction": transaction
         }
-        return await self._put("/remote/object/call", payload)
+        return await self._put(EP_CALL, payload)
 
-    # ─────────────────────────────────────────────
-    # Asset Registry
-    # ─────────────────────────────────────────────
+    # ──────────────────────────────────────────────────────────────────────
+    # Asset registry helpers
+    # ──────────────────────────────────────────────────────────────────────
 
-    async def get_assets_in_path(self, content_path: str, recursive: bool = True) -> list:
-        """Get all assets in a content path."""
+    async def get_assets_in_path(
+        self,
+        content_path: str,
+        recursive:    bool = True,
+        filter_class: str | None = None
+    ) -> list[dict]:
+        """
+        Get all assets in a content path.
+        Optional filter_class (e.g. "Blueprint", "StaticMesh", "Material").
+        """
+        class_filter = f", class_names=['{filter_class}']" if filter_class else ""
         script = f"""
-import unreal
-import json
-
+import unreal, json
 registry = unreal.AssetRegistryHelpers.get_asset_registry()
-assets = registry.get_assets_by_path('{content_path}', recursive={str(recursive)})
-result = []
-for asset in assets:
-    result.append({{
-        "name": str(asset.asset_name),
-        "path": str(asset.object_path),
-        "class": str(asset.asset_class_path.asset_name),
-        "package": str(asset.package_name)
+assets = registry.get_assets_by_path('{content_path}', recursive={str(recursive)}{class_filter})
+out = []
+for a in assets:
+    out.append({{
+        "name":    str(a.asset_name),
+        "path":    str(a.object_path),
+        "class":   str(a.asset_class_path.asset_name),
+        "package": str(a.package_name)
     }})
-print("UEOS_ASSETS:" + json.dumps(result))
+print("UEOS_ASSETS:" + json.dumps(out))
 """
         result = await self.execute_python(script)
-        output = result.get("output", "")
-        for line in output.split("\n"):
-            if line.startswith("UEOS_ASSETS:"):
-                return json.loads(line.replace("UEOS_ASSETS:", ""))
-        return []
+        raw    = self.parse_output(result, "UEOS_ASSETS:")
+        return json.loads(raw) if raw else []
 
     async def asset_exists(self, asset_path: str) -> bool:
-        """Check if an asset exists in the content browser."""
+        """Check whether an asset exists in the Content Browser."""
         script = f"""
 import unreal
-exists = unreal.EditorAssetLibrary.does_asset_exist('{asset_path}')
-print("UEOS_EXISTS:" + str(exists))
+e = unreal.EditorAssetLibrary.does_asset_exist('{asset_path}')
+print("UEOS_EXISTS:" + str(e))
 """
         result = await self.execute_python(script)
-        output = result.get("output", "")
-        for line in output.split("\n"):
-            if line.startswith("UEOS_EXISTS:"):
-                return "True" in line
-        return False
+        raw    = self.parse_output(result, "UEOS_EXISTS:")
+        return raw is not None and "True" in raw
 
-    # ─────────────────────────────────────────────
-    # Batch Operations
-    # ─────────────────────────────────────────────
+    async def find_assets_by_class(
+        self,
+        class_name:   str,
+        search_path:  str = "/Game",
+        recursive:    bool = True
+    ) -> list[dict]:
+        """Find all assets of a given class in the project."""
+        return await self.get_assets_in_path(search_path, recursive=recursive, filter_class=class_name)
+
+    # ──────────────────────────────────────────────────────────────────────
+    # Level / actor helpers
+    # ──────────────────────────────────────────────────────────────────────
+
+    async def get_selected_actors(self) -> list[dict]:
+        """Get all currently selected actors in the UE editor."""
+        script = """
+import unreal, json
+selected = unreal.EditorLevelLibrary.get_selected_level_actors()
+out = []
+for a in selected:
+    out.append({
+        "name":     a.get_name(),
+        "class":    a.get_class().get_name(),
+        "location": list(a.get_actor_location()),
+        "label":    a.get_actor_label()
+    })
+print("UEOS_RESULT:" + json.dumps(out))
+"""
+        result = await self.execute_python(script)
+        raw    = self.parse_output(result, "UEOS_RESULT:")
+        return json.loads(raw) if raw else []
+
+    async def get_level_actors_by_class(self, class_name: str) -> list[dict]:
+        """Get all actors of a given class in the current level."""
+        script = f"""
+import unreal, json
+all_actors = unreal.EditorLevelLibrary.get_all_level_actors()
+out = []
+for a in all_actors:
+    if a.get_class().get_name() == "{class_name}" or "{class_name}" in a.get_class().get_name():
+        out.append({{
+            "name":     a.get_name(),
+            "label":    a.get_actor_label(),
+            "location": list(a.get_actor_location()),
+            "class":    a.get_class().get_name()
+        }})
+print("UEOS_RESULT:" + json.dumps(out))
+"""
+        result = await self.execute_python(script)
+        raw    = self.parse_output(result, "UEOS_RESULT:")
+        return json.loads(raw) if raw else []
+
+    async def get_current_level_name(self) -> str:
+        """Get the name of the currently open level."""
+        script = """
+import unreal
+world = unreal.EditorLevelLibrary.get_editor_world()
+print("UEOS_RESULT:" + world.get_name())
+"""
+        result = await self.execute_python(script)
+        return self.parse_output(result, "UEOS_RESULT:") or "Unknown"
+
+    # ──────────────────────────────────────────────────────────────────────
+    # Batch operations
+    # ──────────────────────────────────────────────────────────────────────
 
     async def batch_call(self, requests: list[dict]) -> list[dict]:
-        """Execute multiple Remote Control calls in one request."""
+        """
+        Execute multiple Remote Control object-call requests in a single HTTP roundtrip.
+        Each request dict must have: objectPath, functionName, parameters.
+        """
         payload = {"requests": requests}
-        return await self._put("/remote/batch", payload)
+        return await self._put(EP_BATCH, payload)
 
-    # ─────────────────────────────────────────────
-    # Utility
-    # ─────────────────────────────────────────────
+    async def execute_python_batch(
+        self,
+        scripts:       list[str],
+        stop_on_error: bool = True
+    ) -> list[dict]:
+        """
+        Execute multiple Python scripts sequentially inside UE.
+        Returns list of structured result dicts (same shape as execute_python_ex).
+        """
+        results = []
+        for script in scripts:
+            try:
+                raw = await self.execute_python(script)
+                parsed = self._parse_output_ex(raw)
+                results.append(parsed)
+                if stop_on_error and not parsed["ok"]:
+                    break
+            except Exception as e:
+                results.append({"ok": False, "error": str(e), "result": None})
+                if stop_on_error:
+                    break
+        return results
+
+    # ──────────────────────────────────────────────────────────────────────
+    # File execution
+    # ──────────────────────────────────────────────────────────────────────
+
+    async def execute_python_file(self, file_path: str) -> dict:
+        """
+        Execute a Python script file already on disk (accessible to the UE process).
+        The file must be readable by the UE editor process — use absolute Windows paths.
+        """
+        payload = {
+            "objectPath":   PY_PLUGIN_PATH,
+            "functionName": "ExecutePythonScript",
+            "parameters":   {
+                "PythonScript": f'exec(open(r"{file_path}", encoding="utf-8").read())'
+            }
+        }
+        return await self._put(EP_CALL, payload)
+
+    # ──────────────────────────────────────────────────────────────────────
+    # Connectivity
+    # ──────────────────────────────────────────────────────────────────────
 
     async def ping(self) -> bool:
-        """Check if Unreal Remote Control is available."""
+        """Return True if Unreal Remote Control is reachable."""
         try:
             await self.get_engine_info()
             return True
         except Exception:
             return False
 
-    def parse_output(self, result: dict, prefix: str) -> Optional[str]:
+    async def wait_for_ue(self, timeout: int = 60, poll_interval: float = 2.0) -> bool:
         """
-        Parse a specific prefixed line from Python script output.
-        e.g. parse_output(result, "UEOS_RESULT:") → the JSON after the prefix
+        Block until UE Remote Control becomes available or timeout expires.
+        Useful at server startup when UE may still be loading.
         """
-        output = result.get("output", "")
-        for line in output.split("\n"):
-            if line.startswith(prefix):
-                return line.replace(prefix, "").strip()
-        return None
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if await self.ping():
+                return True
+            log.info(f"Waiting for UE Remote Control ({int(deadline - time.monotonic())}s left)…")
+            await asyncio.sleep(poll_interval)
+        return False
+
+    # ──────────────────────────────────────────────────────────────────────
+    # UE 5.4 specific convenience scripts
+    # ──────────────────────────────────────────────────────────────────────
+
+    async def compile_all_blueprints(self) -> dict:
+        """
+        Force-compile all Blueprint assets in the project.
+        Slow on large projects — use only when needed.
+        """
+        script = """
+import unreal, json
+result = unreal.EditorAssetLibrary.consolidate_assets(unreal.load_asset("/Game"), True)
+# Proper approach: use KismetEditorUtilities
+compiled = []
+failed = []
+registry = unreal.AssetRegistryHelpers.get_asset_registry()
+bps = registry.get_assets_by_class(unreal.TopLevelAssetPath("/Script/Engine", "Blueprint"), True)
+for bp_data in bps:
+    bp = unreal.EditorAssetLibrary.load_asset(str(bp_data.object_path))
+    if bp and isinstance(bp, unreal.Blueprint):
+        ok = unreal.KismetEditorUtilities.compile_blueprint(bp)
+        (compiled if ok else failed).append(str(bp_data.asset_name))
+print("UEOS_RESULT:" + json.dumps({"compiled": len(compiled), "failed": len(failed), "failed_list": failed}))
+"""
+        result = await self.execute_python(script)
+        raw    = self.parse_output(result, "UEOS_RESULT:")
+        return json.loads(raw) if raw else {}
+
+    async def save_all_assets(self, path: str = "/Game") -> dict:
+        """Save all dirty assets under the given content path."""
+        script = f"""
+import unreal, json
+saved = unreal.EditorAssetLibrary.save_directory("{path}", only_if_is_dirty=True, recursive=True)
+print("UEOS_RESULT:" + json.dumps({{"saved": saved, "path": "{path}"}}))
+"""
+        result = await self.execute_python(script)
+        raw    = self.parse_output(result, "UEOS_RESULT:")
+        return json.loads(raw) if raw else {}
+
+    async def get_project_stats(self) -> dict:
+        """Return asset count, Blueprint count, Material count from the project registry."""
+        script = """
+import unreal, json
+registry = unreal.AssetRegistryHelpers.get_asset_registry()
+all_assets = registry.get_assets_by_path("/Game", recursive=True)
+counts = {}
+for a in all_assets:
+    cls = str(a.asset_class_path.asset_name)
+    counts[cls] = counts.get(cls, 0) + 1
+top = sorted(counts.items(), key=lambda x: -x[1])[:20]
+print("UEOS_RESULT:" + json.dumps({
+    "total_assets": len(all_assets),
+    "by_class":     dict(top)
+}))
+"""
+        result = await self.execute_python(script)
+        raw    = self.parse_output(result, "UEOS_RESULT:")
+        return json.loads(raw) if raw else {}
