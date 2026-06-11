@@ -1,30 +1,52 @@
 # UEOS — Unreal Engine Operating System
 
-**Version 2.0.0 — Phase 2 Complete**
+**Version 2.1.0 — GUI Launcher + Phase 2 Complete**
 
 AI-driven Unreal Engine 5.4 development system. Claude controls the UE editor
 through 105 MCP tools via the Remote Control API. Zero C++. Pure Python.
 
 ---
 
-## Quick Start
+## 🖥️ GUI Launcher (Recommended)
+
+Double-click **`UEOS.bat`** on Windows — that's it.
+
+The GUI launcher opens a full desktop application with 5 tabs:
+
+| Tab | What it does |
+|-----|-------------|
+| **Dashboard** | Live status of UE, Tripo, Huanyuan, MetaTailor. Start/Stop MCP server. |
+| **API Keys** | Enter & validate Tripo / Huanyuan / MetaTailor keys. Masked by default. |
+| **Settings** | UE Remote Control host/port, temp directory, log level. |
+| **Claude Setup** | Auto-detects your Claude Desktop config and writes the UEOS entry for you. |
+| **Log** | Live color-coded tail of `ueos.log`. |
+
+> **First launch:** the API Keys tab opens automatically so you can enter your Tripo key and validate it before starting the server.
+
+```
+UEOS/
+└── UEOS.bat   ← double-click this
+```
+
+---
+
+## Quick Start (Command Line)
 
 ```bash
-# 1. Copy environment config
-cp .env.example .env
-# Edit .env — add your Tripo API key
-
-# 2. Install dependencies
+# 1. Install dependencies
 pip install -r requirements.txt
 
-# 3. Run setup (installs UE plugin config, creates temp dirs)
+# 2. Run setup wizard (configures API keys interactively)
 python setup/install.py
 
-# 4. Verify all connections
+# 3. (Optional) Verify all connections
 python setup/verify.py
 
-# 5. Point Claude Desktop at this server
-# Edit claude_desktop_config.json path in config/claude_desktop_config.json
+# 4. Launch the GUI
+python ui/launcher.py
+
+# — OR start the MCP server directly —
+python mcp_server/server.py
 ```
 
 **In Unreal Engine 5.4:**
