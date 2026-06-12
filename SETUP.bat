@@ -147,7 +147,7 @@ echo %BOLD%[2/5] Installing Python dependencies...%RESET%
 echo.
 
 :: Quick check first — if all already installed, skip
-python -c "import mcp, aiohttp, dotenv, tkinter" >nul 2>&1
+python -c "import mcp, aiohttp, dotenv, tkinter, fastapi, uvicorn" >nul 2>&1
 if %errorlevel% equ 0 (
     echo %GREEN%  ✓ All dependencies already installed%RESET%
     echo.

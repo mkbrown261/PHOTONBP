@@ -172,10 +172,11 @@ class UEOSLauncher(tk.Tk):
         self.resizable(True, True)
 
         # State
-        self.env_values       = read_env()
-        self.server_proc      = None
-        self._log_after       = None
-        self._status_after    = None
+        self.env_values        = read_env()
+        self.server_proc       = None
+        self.bridge_proc       = None   # Universal AI Bridge process
+        self._log_after        = None
+        self._status_after     = None
         self._wizard_tab_index = 0   # set in _build_tabs if wizard exists
 
         # Style
@@ -410,6 +411,7 @@ class UEOSLauncher(tk.Tk):
         self._build_apikeys_tab()
         self._build_settings_tab()
         self._build_claude_tab()
+        self._build_ai_provider_tab()
         self._build_log_tab()
 
     # ──────────────────────────────────────────────────────────────────────
@@ -1214,7 +1216,395 @@ class UEOSLauncher(tk.Tk):
             messagebox.showinfo("Not found", "Config file doesn't exist yet.\nClick 'Write Config' to create it.", parent=self)
 
     # ──────────────────────────────────────────────────────────────────────
-    # Tab 5 — Log
+    # Tab 5 — AI Provider
+    # ──────────────────────────────────────────────────────────────────────
+
+    # AI provider definitions — label, icon, two setup steps, URL to open
+    _AI_PROVIDERS = [
+        {
+            "key":   "claude",
+            "label": "Claude Desktop",
+            "icon":  "🟣",
+            "desc":  "Recommended. Direct MCP connection — no bridge needed.",
+            "needs_bridge": False,
+            "steps": [],   # already handled by Claude Setup tab
+            "already_done": True,
+        },
+        {
+            "key":   "chatgpt",
+            "label": "ChatGPT / OpenAI",
+            "icon":  "🟢",
+            "desc":  "Use UEOS as a ChatGPT Action in any Custom GPT.",
+            "needs_bridge": True,
+            "steps": [
+                {
+                    "num": "1",
+                    "title": "Start the UEOS Bridge",
+                    "body":  "Click  ▶ Start Bridge  below. It runs silently in the background on port 8080.",
+                },
+                {
+                    "num": "2",
+                    "title": "Add it to your Custom GPT",
+                    "body":  "In ChatGPT → My GPTs → Configure → Actions → click  'Import from URL'  and paste:\n\n  http://localhost:8080/openapi.json\n\nThat's it. Your GPT now has all 339 UEOS tools.",
+                    "copy_value": "http://localhost:8080/openapi.json",
+                    "link": "https://chat.openai.com/gpts/editor",
+                    "link_text": "Open GPT Editor →",
+                },
+            ],
+        },
+        {
+            "key":   "openrouter",
+            "label": "OpenRouter",
+            "icon":  "🔵",
+            "desc":  "Use any model (GPT-4o, Gemini, Mistral, Llama…) via OpenRouter.",
+            "needs_bridge": True,
+            "steps": [
+                {
+                    "num": "1",
+                    "title": "Start the UEOS Bridge",
+                    "body":  "Click  ▶ Start Bridge  below. Runs on http://localhost:8080",
+                },
+                {
+                    "num": "2",
+                    "title": "In your OpenRouter app or script",
+                    "body":  "Fetch the tool schema and add it to your API call:\n\n"
+                             "  tools_url  = 'http://localhost:8080/tools'\n"
+                             "  call_url   = 'http://localhost:8080/call'\n\n"
+                             "Copy the system prompt too — it tells the AI what tools it has.",
+                    "copy_value": "http://localhost:8080/tools",
+                    "link": "https://openrouter.ai",
+                    "link_text": "Open OpenRouter →",
+                },
+            ],
+        },
+        {
+            "key":   "cursor",
+            "label": "Cursor",
+            "icon":  "⚫",
+            "desc":  "Cursor already supports MCP. For non-Claude models, use the bridge.",
+            "needs_bridge": True,
+            "steps": [
+                {
+                    "num": "1",
+                    "title": "Claude in Cursor (no bridge needed)",
+                    "body":  "Cursor → Settings → MCP → add server:\n\n"
+                             "  command: python\n"
+                             "  args: [\"C:/UEOS/mcp_server/server.py\"]\n\n"
+                             "Works with Claude models directly.",
+                },
+                {
+                    "num": "2",
+                    "title": "GPT-4o / other models in Cursor",
+                    "body":  "Start the bridge (▶ Start Bridge below), then in Cursor:\n\n"
+                             "  Settings → Features → paste the system prompt from\n"
+                             "  http://localhost:8080/system-prompt\n\n"
+                             "The AI will call tools via the bridge automatically.",
+                    "copy_value": "http://localhost:8080/system-prompt",
+                    "link": "https://cursor.sh",
+                    "link_text": "Open Cursor →",
+                },
+            ],
+        },
+        {
+            "key":   "ollama",
+            "label": "Local AI (Ollama)",
+            "icon":  "🟡",
+            "desc":  "Run UEOS tools with a fully local, private AI model. No API key needed.",
+            "needs_bridge": True,
+            "steps": [
+                {
+                    "num": "1",
+                    "title": "Install Ollama + a tool-capable model",
+                    "body":  "Install Ollama from ollama.com, then run:\n\n"
+                             "  ollama pull qwen2.5-coder\n\n"
+                             "qwen2.5-coder supports function calling. Other options: mistral-nemo, llama3.1.",
+                    "link": "https://ollama.com",
+                    "link_text": "Get Ollama →",
+                },
+                {
+                    "num": "2",
+                    "title": "Start the bridge and connect",
+                    "body":  "Click  ▶ Start Bridge  below, then in your Ollama client or script:\n\n"
+                             "  tools_url = 'http://localhost:8080/tools'\n"
+                             "  call_url  = 'http://localhost:8080/call'\n\n"
+                             "  system_prompt: http://localhost:8080/system-prompt\n\n"
+                             "Everything runs 100% locally. No data leaves your machine.",
+                    "copy_value": "http://localhost:8080/tools",
+                },
+            ],
+        },
+    ]
+
+    def _build_ai_provider_tab(self):
+        frame = ttk.Frame(self.notebook, style="TFrame")
+        self.notebook.add(frame, text="  🌐 AI Provider  ")
+
+        # Scrollable canvas
+        canvas = tk.Canvas(frame, bg=BG2, highlightthickness=0)
+        scroll = ttk.Scrollbar(frame, orient="vertical", command=canvas.yview)
+        inner  = tk.Frame(canvas, bg=BG2)
+        inner.bind("<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=inner, anchor="nw")
+        canvas.configure(yscrollcommand=scroll.set)
+        canvas.pack(side="left", fill="both", expand=True)
+        scroll.pack(side="right", fill="y")
+
+        # ── Title ────────────────────────────────────────────────────────
+        tk.Label(inner, text="Which AI do you want to use?",
+                 font=("Segoe UI", 16, "bold"), bg=BG2, fg=WHITE
+                 ).pack(anchor="w", padx=24, pady=(20, 2))
+        tk.Label(inner,
+                 text="Pick your AI below. UEOS handles the rest — all 339 tools work with any of them.",
+                 font=FONT_SMALL, bg=BG2, fg=TEXT_DIM
+                 ).pack(anchor="w", padx=24, pady=(0, 16))
+
+        # ── Bridge status strip ──────────────────────────────────────────
+        bstrip = tk.Frame(inner, bg=ACCENT, pady=10, padx=18)
+        bstrip.pack(fill="x", padx=20, pady=(0, 16))
+
+        self._bridge_dot  = tk.Label(bstrip, text="●", font=("Segoe UI", 14),
+                                     bg=ACCENT, fg=TEXT_DIM)
+        self._bridge_dot.pack(side="left", padx=(0, 8))
+
+        self._bridge_lbl  = tk.Label(bstrip, text="Bridge: Stopped",
+                                     font=FONT_H2, bg=ACCENT, fg=TEXT_DIM)
+        self._bridge_lbl.pack(side="left")
+
+        self._bridge_url_lbl = tk.Label(bstrip, text="",
+                                        font=FONT_SMALL, bg=ACCENT, fg=TEXT_DIM,
+                                        cursor="hand2")
+        self._bridge_url_lbl.pack(side="left", padx=(16, 0))
+        self._bridge_url_lbl.bind("<Button-1>",
+            lambda e: webbrowser.open("http://localhost:8080/docs")
+            if self.bridge_proc else None)
+
+        self._bridge_stop_btn = ttk.Button(bstrip, text="Stop Bridge",
+                                           style="Secondary.TButton",
+                                           command=self._stop_bridge,
+                                           state="disabled")
+        self._bridge_stop_btn.pack(side="right", padx=(0, 4))
+
+        self._bridge_start_btn = ttk.Button(bstrip, text="▶  Start Bridge",
+                                            style="Green.TButton",
+                                            command=self._start_bridge)
+        self._bridge_start_btn.pack(side="right", padx=(0, 8))
+
+        # ── Provider cards ───────────────────────────────────────────────
+        self._provider_frames: dict[str, tk.Frame] = {}
+        self._selected_provider = tk.StringVar(value="claude")
+
+        for provider in self._AI_PROVIDERS:
+            self._build_provider_card(inner, provider)
+
+        # ── Copy system prompt strip ─────────────────────────────────────
+        sp_strip = tk.Frame(inner, bg=BG2)
+        sp_strip.pack(fill="x", padx=20, pady=(8, 20))
+        tk.Label(sp_strip,
+                 text="Need a system prompt for your AI?  ",
+                 font=FONT_SMALL, bg=BG2, fg=TEXT_DIM).pack(side="left")
+        ttk.Button(sp_strip, text="📋  Copy System Prompt",
+                   style="Secondary.TButton",
+                   command=self._copy_system_prompt).pack(side="left")
+        ttk.Button(sp_strip, text="🌐  Open in Browser",
+                   style="Secondary.TButton",
+                   command=lambda: webbrowser.open("http://localhost:8080/system-prompt")
+                   ).pack(side="left", padx=(6, 0))
+
+    def _build_provider_card(self, parent: tk.Frame, provider: dict):
+        key = provider["key"]
+
+        # Outer card
+        card = tk.Frame(parent, bg=ACCENT, pady=16, padx=18,
+                        highlightthickness=2,
+                        highlightbackground=BLUE if key == "claude" else ACCENT)
+        card.pack(fill="x", padx=20, pady=(0, 8))
+        self._provider_frames[key] = card
+
+        # ── Header row ────────────────────────────────────────────────
+        hdr = tk.Frame(card, bg=ACCENT)
+        hdr.pack(fill="x")
+
+        # Radio + icon + name
+        rb = tk.Radiobutton(
+            hdr,
+            variable=self._selected_provider,
+            value=key,
+            text=f"{provider['icon']}  {provider['label']}",
+            font=FONT_H2,
+            bg=ACCENT, fg=WHITE,
+            activebackground=ACCENT, activeforeground=WHITE,
+            selectcolor=ACCENT,
+            command=lambda k=key: self._on_provider_select(k),
+        )
+        rb.pack(side="left")
+
+        tk.Label(hdr, text=provider["desc"],
+                 font=FONT_SMALL, bg=ACCENT, fg=TEXT_DIM).pack(side="left", padx=(16, 0))
+
+        if provider.get("already_done"):
+            tk.Label(hdr, text="✓  Active",
+                     font=("Segoe UI", 10, "bold"), bg=ACCENT, fg=GREEN
+                     ).pack(side="right")
+
+        # ── Steps (collapsed until selected) ─────────────────────────
+        if provider["steps"]:
+            steps_frame = tk.Frame(card, bg=ACCENT)
+            # Store ref so we can show/hide
+            card._steps_frame = steps_frame   # type: ignore
+
+            for step in provider["steps"]:
+                self._build_provider_step(steps_frame, step)
+        else:
+            card._steps_frame = None   # type: ignore
+
+        # Show steps if this is the default selection
+        if key == self._selected_provider.get() and hasattr(card, "_steps_frame") and card._steps_frame:
+            card._steps_frame.pack(fill="x", pady=(12, 0))
+
+    def _build_provider_step(self, parent: tk.Frame, step: dict):
+        row = tk.Frame(parent, bg=BG, padx=14, pady=10)
+        row.pack(fill="x", pady=(6, 0))
+
+        # Number badge
+        tk.Label(row, text=step["num"],
+                 font=("Segoe UI", 11, "bold"),
+                 bg=BLUE2, fg=WHITE, width=3
+                 ).pack(side="left", anchor="n", padx=(0, 12))
+
+        content = tk.Frame(row, bg=BG)
+        content.pack(side="left", fill="x", expand=True)
+
+        tk.Label(content, text=step["title"],
+                 font=("Segoe UI", 10, "bold"), bg=BG, fg=WHITE
+                 ).pack(anchor="w")
+
+        tk.Label(content, text=step["body"],
+                 font=FONT_MONO, bg=BG, fg=TEXT_DIM,
+                 justify="left", wraplength=520
+                 ).pack(anchor="w", pady=(4, 0))
+
+        # Action buttons row
+        if step.get("copy_value") or step.get("link"):
+            btn_row = tk.Frame(content, bg=BG)
+            btn_row.pack(anchor="w", pady=(8, 0))
+
+            if step.get("copy_value"):
+                val = step["copy_value"]
+                def _copy(v=val):
+                    self.clipboard_clear()
+                    self.clipboard_append(v)
+                    messagebox.showinfo("Copied", f"Copied to clipboard:\n{v}", parent=self)
+                ttk.Button(btn_row, text="📋  Copy URL",
+                           style="Secondary.TButton",
+                           command=_copy).pack(side="left", padx=(0, 6))
+
+            if step.get("link"):
+                url  = step["link"]
+                text = step.get("link_text", "Open →")
+                ttk.Button(btn_row, text=text,
+                           style="Secondary.TButton",
+                           command=lambda u=url: webbrowser.open(u)
+                           ).pack(side="left")
+
+    def _on_provider_select(self, key: str):
+        """Show steps for selected provider, hide others."""
+        for pk, card in self._provider_frames.items():
+            steps = getattr(card, "_steps_frame", None)
+            if steps:
+                if pk == key:
+                    steps.pack(fill="x", pady=(12, 0))
+                else:
+                    steps.pack_forget()
+            # Highlight border
+            card.configure(
+                highlightbackground=BLUE if pk == key else ACCENT
+            )
+
+    # ── Bridge start / stop ──────────────────────────────────────────────────
+
+    def _start_bridge(self):
+        if self.bridge_proc and self.bridge_proc.poll() is None:
+            return  # already running
+
+        bridge_py = ROOT / "mcp_server" / "bridge_server.py"
+        if not bridge_py.exists():
+            messagebox.showerror("Error",
+                f"bridge_server.py not found at:\n{bridge_py}", parent=self)
+            return
+
+        try:
+            self.bridge_proc = subprocess.Popen(
+                [sys.executable, str(bridge_py)],
+                cwd=str(bridge_py.parent),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+            )
+            self._update_bridge_ui(running=True)
+            self._append_log(f"[BRIDGE] Started on http://localhost:8080 (PID {self.bridge_proc.pid})\n")
+            # Give it 2s then verify it's up
+            self.after(2000, self._verify_bridge)
+        except Exception as e:
+            messagebox.showerror("Error", f"Could not start bridge:\n{e}", parent=self)
+
+    def _stop_bridge(self):
+        if self.bridge_proc:
+            self.bridge_proc.terminate()
+            self.bridge_proc = None
+        self._update_bridge_ui(running=False)
+        self._append_log("[BRIDGE] Stopped\n")
+
+    def _verify_bridge(self):
+        """Quick HTTP check that the bridge is actually responding."""
+        def _check():
+            try:
+                with urllib.request.urlopen("http://localhost:8080/", timeout=4) as r:
+                    data = json.loads(r.read())
+                    count = data.get("tools", "?")
+                    self.after(0, lambda: self._bridge_url_lbl.configure(
+                        text=f"http://localhost:8080  •  {count} tools ready",
+                        fg=GREEN,
+                    ))
+            except Exception:
+                self.after(0, lambda: self._bridge_url_lbl.configure(
+                    text="Starting… (may take 10s on first run)",
+                    fg=YELLOW,
+                ))
+                # Retry once more after 5s
+                self.after(5000, self._verify_bridge)
+        threading.Thread(target=_check, daemon=True).start()
+
+    def _update_bridge_ui(self, running: bool):
+        if running:
+            self._bridge_dot.configure(fg=GREEN)
+            self._bridge_lbl.configure(text="Bridge: Running", fg=GREEN)
+            self._bridge_url_lbl.configure(text="Starting…", fg=YELLOW)
+            self._bridge_start_btn.configure(state="disabled")
+            self._bridge_stop_btn.configure(state="normal")
+        else:
+            self._bridge_dot.configure(fg=TEXT_DIM)
+            self._bridge_lbl.configure(text="Bridge: Stopped", fg=TEXT_DIM)
+            self._bridge_url_lbl.configure(text="")
+            self._bridge_start_btn.configure(state="normal")
+            self._bridge_stop_btn.configure(state="disabled")
+
+    def _copy_system_prompt(self):
+        try:
+            with urllib.request.urlopen("http://localhost:8080/system-prompt", timeout=4) as r:
+                prompt = r.read().decode()
+            self.clipboard_clear()
+            self.clipboard_append(prompt)
+            messagebox.showinfo("Copied",
+                "System prompt copied to clipboard!\nPaste it into your AI's system prompt field.",
+                parent=self)
+        except Exception:
+            messagebox.showwarning("Bridge not running",
+                "Start the bridge first (▶ Start Bridge), then copy the system prompt.",
+                parent=self)
+
+    # ──────────────────────────────────────────────────────────────────────
+    # Tab 6 — Log
     # ──────────────────────────────────────────────────────────────────────
 
     def _build_log_tab(self):
@@ -1410,6 +1800,8 @@ class UEOSLauncher(tk.Tk):
             self.after_cancel(self._status_after)
         if self.server_proc:
             self.server_proc.terminate()
+        if self.bridge_proc:
+            self.bridge_proc.terminate()
         super().destroy()
 
 
