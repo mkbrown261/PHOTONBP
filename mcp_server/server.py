@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
 UEOS — Unreal Engine Operating System
-MCP Server Entry Point — Phase 5
+MCP Server Entry Point — Phase 6
 
-Version: 5.0.0
+Version: 6.0.0
 
 Connects Claude Desktop to Unreal Engine 5.4 via:
   - Remote Control API (HTTP, port 30010)
@@ -23,13 +23,16 @@ Phase 4 tools registered:
   UMG            20 tools  (Phase 4)
   Sequencer      18 tools  (Phase 4)
   BehaviorTree   17 tools  (Phase 4)
-  EditorWidget   20 tools  ← NEW Phase 5
+  EditorWidget   20 tools  (Phase 5)
+  GameplayAbility 20 tools ← NEW Phase 6
+  EnvironmentQuery 20 tools ← NEW Phase 6
+  NavMesh        17 tools  ← NEW Phase 6
   ─────────────────────────
-  Subtotal      191 UE tools
+  Subtotal      248 UE tools
   Pipeline        8 extra tools (Tripo/Huanyuan/MetaTailor/status)
   Diagnostics     3 tools
   ─────────────────────────
-  Total         202 tools
+  Total         259 tools
 """
 
 import asyncio
@@ -84,7 +87,10 @@ from tools.sequencer  import SequencerTools
 from tools.inspection import InspectionTools
 from tools.scene          import SceneTools
 from tools.behavior_tree  import BehaviorTreeTools
-from tools.editor_widget  import EditorWidgetTools
+from tools.editor_widget      import EditorWidgetTools
+from tools.gameplay_ability   import GameplayAbilityTools
+from tools.environment_query  import EnvironmentQueryTools
+from tools.navmesh            import NavMeshTools
 
 # ── API Clients ───────────────────────────────────────────────────────────────
 from api_clients.tripo       import TripoClient
@@ -130,7 +136,10 @@ data_tools       = DataTools(ue)
 umg_tools        = UMGTools(ue)
 sequencer_tools     = SequencerTools(ue)
 behavior_tree_tools  = BehaviorTreeTools(ue)
-editor_widget_tools  = EditorWidgetTools(ue)
+editor_widget_tools      = EditorWidgetTools(ue)
+gameplay_ability_tools   = GameplayAbilityTools(ue)
+environment_query_tools  = EnvironmentQueryTools(ue)
+navmesh_tools            = NavMeshTools(ue)
 inspection_tools     = InspectionTools(ue)
 scene_tools      = SceneTools(ue)
 
@@ -156,6 +165,9 @@ async def list_tools() -> list[types.Tool]:
     tools.extend(await sequencer_tools.get_tool_definitions())         # Phase 4 — 18 tools
     tools.extend(await behavior_tree_tools.get_tool_definitions())     # Phase 4 — 17 tools
     tools.extend(await editor_widget_tools.get_tool_definitions())     # Phase 5 — 20 tools
+    tools.extend(await gameplay_ability_tools.get_tool_definitions())   # Phase 6 — 20 tools
+    tools.extend(await environment_query_tools.get_tool_definitions())  # Phase 6 — 20 tools
+    tools.extend(await navmesh_tools.get_tool_definitions())            # Phase 6 — 17 tools
     tools.extend(await inspection_tools.get_tool_definitions())  # 12
     tools.extend(await scene_tools.get_tool_definitions())       # 16
 
@@ -415,6 +427,12 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
             return await behavior_tree_tools.handle(name, arguments)
         elif name.startswith("ew_"):
             return await editor_widget_tools.handle(name, arguments)
+        elif name.startswith("gas_"):
+            return await gameplay_ability_tools.handle(name, arguments)
+        elif name.startswith("eqs_"):
+            return await environment_query_tools.handle(name, arguments)
+        elif name.startswith("nav_"):
+            return await navmesh_tools.handle(name, arguments)
         elif name.startswith("inspect_"):
             return await inspection_tools.handle(name, arguments)
         elif name.startswith("scene_"):
@@ -480,8 +498,8 @@ async def handle_status() -> list[types.TextContent]:
 
     lines = [
         "═══════════════════════════════════════════",
-        "  UEOS v5.0 — Unreal Engine Operating System",
-        "  Phase 5 Complete: 202 tools registered",
+        "  UEOS v6.0 — Unreal Engine Operating System",
+        "  Phase 6 Complete: 259 tools registered",
         "═══════════════════════════════════════════",
     ]
     if not tripo_configured:
@@ -822,7 +840,7 @@ async def handle_full_pipeline(args: dict) -> list[types.TextContent]:
 
 async def main():
     log.info("═══════════════════════════════════════════")
-    log.info("  UEOS MCP Server v5.0 — Phase 5 Complete")
+    log.info("  UEOS MCP Server v6.0 — Phase 6 Complete")
     log.info("  Unreal Engine Operating System")
     log.info("═══════════════════════════════════════════")
     log.info(f"  UE Remote:    {ue.host}:{ue.port}")
@@ -833,8 +851,9 @@ async def main():
     log.info("          Inspection(12) Scene(16) Data(15)")
     log.info("          Animation(22) UMG(20) Sequencer(18)")
     log.info("          BehaviorTree(17) EditorWidget(20)")
+    log.info("          GameplayAbility(20) EnvironmentQuery(20) NavMesh(17)")
     log.info("          Pipeline(8) Diagnostics(3)")
-    log.info("          ── Total: 202 tools ──")
+    log.info("          ── Total: 259 tools ──")
     log.info("═══════════════════════════════════════════")
 
     async with stdio_server() as (read_stream, write_stream):

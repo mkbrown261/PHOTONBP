@@ -63,7 +63,7 @@ Claude Desktop
      │
      │ MCP (stdio)
      ▼
-mcp_server/server.py          ← 202 tools registered
+mcp_server/server.py          ← 259 tools registered
      │
      ├── tools/blueprint.py   ← 17 tools: graph editing, compile, validate
      ├── tools/material.py    ← 14 tools: PBR, dissolve, hologram, Substrate
@@ -75,7 +75,10 @@ mcp_server/server.py          ← 202 tools registered
      ├── tools/umg.py         ← 20 tools: Widget BPs, HUDs, menus, 5 presets  (Phase 4)
      ├── tools/sequencer.py   ← 18 tools: Level Sequences, camera cuts, tracks (Phase 4)
      ├── tools/behavior_tree.py ← 17 tools: BT, Blackboard, Tasks, AI pipeline (Phase 4)
-     └── tools/editor_widget.py  ← 20 tools: EUW panels, menus, UEOS panel    ← NEW Phase 5
+     ├── tools/editor_widget.py  ← 20 tools: EUW panels, menus, UEOS panel     (Phase 5)
+     ├── tools/gameplay_ability.py ← 20 tools: GAS, AttributeSets, Effects, Cues  ← NEW Phase 6
+     ├── tools/environment_query.py ← 20 tools: EQS queries, generators, tests   ← NEW Phase 6
+     └── tools/navmesh.py         ← 17 tools: NavMesh, NavAreas, Links, AI move ← NEW Phase 6
      │
      ├── remote_control/client.py  ← UE 5.4 HTTP client w/ retry logic
      ├── api_clients/tripo.py      ← Tripo REST API
@@ -370,7 +373,7 @@ Unreal Engine 5.4
 | Tab | Contents |
 |-----|----------|
 | **Status** | Live connection dots (UE/Tripo/Huanyuan/MetaTailor) · phase summary · Refresh button |
-| **Tools** | Category grid (12 categories · 202 tools) · search box |
+| **Tools** | Category grid (15 categories · 259 tools) · search box |
 | **Log** | Scrollable operation log · Clear/Copy buttons |
 | **Settings** | UE host/port · API key inputs · log level picker · Save/Reset |
 | **Pipeline** | Concept → character one-click launcher · service picker · progress bar |
@@ -387,6 +390,111 @@ ewu.ueos_install_panel()          # creates + opens panel + adds Tools menu entr
 ```
 "Create the UEOS control panel"
 → calls ew_create_ueos_panel() → 5-tab dockable panel opens in UE immediately
+```
+
+---
+
+### ⚡ Gameplay Ability System Tools (20) — Phase 6
+
+| Tool | Description |
+|------|-------------|
+| `gas_create_ability_system_component` | Add ASC to a Blueprint actor with replication mode |
+| `gas_setup_ability_set` | Bundle abilities/effects/attribute sets into a UAbilitySet Data Asset |
+| `gas_grant_ability` | Grant a GameplayAbility to an actor's ASC at a given level |
+| `gas_revoke_ability` | Remove a granted ability by class or GameplayTag |
+| `gas_list_granted_abilities` | List all abilities on an actor's ASC |
+| `gas_create_gameplay_ability` | Create a new GameplayAbility Blueprint with tags and policies |
+| `gas_set_ability_tags` | Set AbilityTags, ActivationRequired/Blocked, Cancel/Block containers |
+| `gas_add_gameplay_effect_to_ability` | Link a GE to fire when an ability activates |
+| `gas_set_ability_costs` | Define cost GE (deducts Mana/Stamina) for an ability |
+| `gas_set_ability_cooldown` | Define cooldown GE with duration and cooldown tag |
+| `gas_create_gameplay_effect` | Create a GameplayEffect Blueprint (instant/infinite/has_duration) |
+| `gas_set_effect_duration` | Set or scale duration on a has_duration GE |
+| `gas_add_attribute_modifier` | Add Add/Multiply/Divide/Override modifier to a GE |
+| `gas_add_gameplay_cue` | Add a GameplayCue tag to a GE; optionally create cue BP stub |
+| `gas_apply_effect_to_target` | Apply a GE to a target actor in-editor (PIE-compatible) |
+| `gas_create_attribute_set` | Create an AttributeSet Blueprint with default attribute list |
+| `gas_add_attribute` | Add FGameplayAttributeData attributes to an existing AttributeSet |
+| `gas_set_attribute_defaults` | Set default values for attributes by dict or DataTable |
+| `gas_list_attribute_sets` | List all AttributeSet Blueprints in a content path |
+| `gas_diagnostics` | GAS health-check: all abilities, effects, attr sets, tag registry |
+
+**Quick GAS setup from UE Python console:**
+```python
+import sys, importlib
+sys.path.insert(0, r"C:\UEOS\ue_scripts")
+import gas_utils as gas; importlib.reload(gas)
+gas.ueos_gas_quick_setup("/Game/Characters/BP_Hero")
+# Creates AS_Base (8 attrs) + ASC on Blueprint + GA_BasicAttack/Sprint/Dodge + starter GEs
+```
+
+---
+
+### 🔍 Environment Query System Tools (20) — Phase 6
+
+| Tool | Description |
+|------|-------------|
+| `eqs_create_query` | Create a new EQS query asset with optional default generator |
+| `eqs_list_queries` | List all EQS query assets in a content path |
+| `eqs_get_query_info` | Inspect generators and tests on an EQS query |
+| `eqs_duplicate_query` | Duplicate an EQS query to a new name/location |
+| `eqs_delete_query` | Delete an EQS query asset (warns if referenced) |
+| `eqs_add_actor_generator` | Add ActorsOfClass generator with search radius |
+| `eqs_add_grid_generator` | Add SimpleGrid generator with spacing and projection |
+| `eqs_add_donut_generator` | Add Donut ring generator for flanking / positional queries |
+| `eqs_add_patrol_generator` | Add PatrolPath generator for patrol-route queries |
+| `eqs_add_simple_grid_generator` | Add cover-optimised SimpleGrid preset |
+| `eqs_add_distance_test` | Add Distance test (filter/score with linear/square/inverse equations) |
+| `eqs_add_trace_test` | Add Trace test (LoS check, channel, hit/miss filter) |
+| `eqs_add_dot_test` | Add Dot product test for directional/flanking scoring |
+| `eqs_add_overlap_test` | Add Overlap test (box/sphere/capsule, open-space filter) |
+| `eqs_add_gameplay_tag_test` | Add GameplayTag test (requires/blocks tags on ASC actors) |
+| `eqs_run_eqs_query` | Execute EQS query against a querier actor and return top-N results |
+| `eqs_set_query_on_ai` | Assign EQS query to an AI controller or BT task |
+| `eqs_preview_query_results` | Toggle EQS debug visualization in viewport |
+| `eqs_list_contexts` | List built-in + custom EnvQueryContext classes |
+| `eqs_diagnostics` | EQS health-check: empty queries, missing tests, context issues |
+
+**Quick EQS setup from UE Python console:**
+```python
+import sys, importlib
+sys.path.insert(0, r"C:\UEOS\ue_scripts")
+import eqs_utils as eqs; importlib.reload(eqs)
+eqs.ueos_eqs_quick_setup("/Game/AI/EQS")
+# Creates EQS_FindCover, EQS_FlankEnemy, EQS_PatrolNext, EQS_Retreat, EQS_AttackPosition
+```
+
+---
+
+### 🗺️ NavMesh / AI Navigation Tools (17) — Phase 6
+
+| Tool | Description |
+|------|-------------|
+| `nav_rebuild_navmesh` | Force full (or dirty-tile) NavMesh rebuild |
+| `nav_set_navmesh_bounds` | Place or resize a NavMeshBoundsVolume |
+| `nav_get_navmesh_info` | Get navmesh actors, bounds volumes, and agent config |
+| `nav_set_navmesh_properties` | Set tile size, cell size, agent radius/height, slope, step height |
+| `nav_find_path` | Find nav path between two world locations; returns waypoints + length |
+| `nav_find_nearest_nav_point` | Snap a world location to the nearest navmesh point |
+| `nav_project_point_to_nav` | Project a point onto the navmesh surface |
+| `nav_check_nav_reachable` | Test if a location is reachable; returns reachable + partial path |
+| `nav_create_nav_area` | Create a custom NavArea Blueprint with traversal cost |
+| `nav_list_nav_areas` | List all built-in and custom NavArea classes |
+| `nav_set_area_on_volume` | Set NavArea on a NavModifierVolume (create if needed) |
+| `nav_get_nav_area_cost` | Get traversal cost and flags for a NavArea class |
+| `nav_create_nav_link_proxy` | Place a NavLinkProxy (jump points, ladders, portals) |
+| `nav_list_nav_links` | List all NavLinkProxy actors in the current level |
+| `nav_set_ai_movement` | Configure AICharacter max speed, acceleration, acceptance radius |
+| `nav_get_ai_path_to_target` | Get current nav path from an AI actor to a target |
+| `nav_diagnostics` | NavMesh health-check: bounds volumes, links, nav system, issues |
+
+**Quick NavMesh setup from UE Python console:**
+```python
+import sys, importlib
+sys.path.insert(0, r"C:\UEOS\ue_scripts")
+import navmesh_utils as nav; importlib.reload(nav)
+nav.ueos_nav_quick_setup(extent=5000.0)
+# Places NavMeshBoundsVolume (10000×10000 cm) and triggers rebuild
 ```
 
 ---
@@ -424,7 +532,10 @@ Pre-built scripts in `ue_scripts/` that run INSIDE the UE editor:
 | `animation_utils.py` | 16 | Locomotion SM, attack pipeline, footsteps, IK |
 | `umg_utils.py` | 18 | Widget builders, HUD presets, style helpers |
 | `sequencer_utils.py` | 14 | Cutscene builder, camera dolly, fade/audio tracks |
-| `editor_widget_utils.py` | 17 | EUW builder, UEOS panel, menus, status bar ← NEW |
+| `editor_widget_utils.py` | 17 | EUW builder, UEOS panel, menus, status bar (Phase 5) |
+| `gas_utils.py` | 17 | GAS scaffold, AttributeSet/Ability/Effect/Cue creators ← NEW |
+| `eqs_utils.py` | 15 | EQS query presets (cover/flank/patrol/retreat/attack) ← NEW |
+| `navmesh_utils.py` | 16 | NavMesh setup, path queries, nav areas, AI speed ← NEW |
 | `bulk_compile_blueprints.py` | — | Compile all BPs under path |
 | `import_fbx_batch.py` | — | Batch FBX import with full options |
 | `setup_character_bp.py` | — | Complete Character BP with mesh/anim/clothing |
@@ -501,7 +612,9 @@ UEOS_LOG_LEVEL=INFO
 | **Total** | | | **182** |
 | Phase 5 | ✅ Complete | Editor Utility Widgets (20): dockable UEOS panel, menus, status bar | 20 |
 | **Total** | | | **202** |
-| Phase 6 | ⏳ Planned | Enhanced Gameplay: GAS (Ability System), EQS (Environment Queries), NavMesh | TBD |
+| Phase 6 | ✅ Complete | GAS (20): Abilities, Effects, AttributeSets, Cues · EQS (20): queries, generators, tests · NavMesh (17): paths, areas, links | 57 |
+| **Total** | | | **259** |
+| Phase 7 | ⏳ Planned | Physics (Chaos), Procedural Content Generation (PCG), Enhanced Input, Metasounds | TBD |
 
 ---
 
@@ -576,6 +689,26 @@ UEOS_LOG_LEVEL=INFO
 
 "Post a status bar message: 'UEOS: Importing 42 assets… 67%'
  with progress 0.67."
+
+"Set up the full GAS stack for /Game/Characters/BP_Hero:
+ add an AbilitySystemComponent (mixed replication),
+ create AS_HeroBase AttributeSet with Health/MaxHealth/Mana/Stamina,
+ create GA_FireBolt and GA_Shield abilities, create GE_FireDamage (-30 instant)
+ and GE_ShieldBuff (+50 Armor for 10 seconds)."
+
+"Create an EQS query EQS_FindFlankPosition at /Game/AI/EQS.
+ Use a Donut generator around the enemy (inner 300, outer 800, 3 rings, 8 points).
+ Add a Trace test (must have LoS to enemy) and a Distance filter (min 300, max 800)."
+
+"Create an EQS cover query EQS_TakeCover: SimpleGrid 800 around the querier,
+ spacing 80. Add a Trace test: not visible from enemy. Add Distance score: close = better."
+
+"Set up NavMesh for the outdoor level:
+ Place a NavMeshBoundsVolume 20000×20000 at center. Set agent radius=42, max step=40.
+ Rebuild the navmesh. Then check if (0,0,0) can reach (5000,5000,0)."
+
+"Place a NavLinkProxy jump link from (0,0,0) to (200,0,300) direction both_ways.
+ Then run nav diagnostics and report all issues."
 ```
 
 ---
@@ -594,7 +727,7 @@ ueos/
 │   ├── __init__.py
 │   └── launcher.py             ← 5-tab tkinter GUI (993 lines)
 ├── mcp_server/
-│   ├── server.py               ← MCP entry point (202 tools)
+│   ├── server.py               ← MCP entry point (259 tools)
 │   ├── remote_control/
 │   │   └── client.py           ← UE 5.4 HTTP client w/ retry
 │   ├── api_clients/
@@ -612,13 +745,19 @@ ueos/
 │       ├── umg.py              ← 20 tools ✅ Phase 4
 │       ├── sequencer.py        ← 18 tools ✅ Phase 4
 │       ├── behavior_tree.py    ← 17 tools ✅ Phase 4
-│       └── editor_widget.py    ← 20 tools ✅ Phase 5
+│       ├── editor_widget.py    ← 20 tools ✅ Phase 5
+│       ├── gameplay_ability.py ← 20 tools ✅ Phase 6
+│       ├── environment_query.py ← 20 tools ✅ Phase 6
+│       └── navmesh.py          ← 17 tools ✅ Phase 6
 ├── ue_scripts/                 ← Run INSIDE UE editor
 │   ├── ueos_utils.py           ← 40+ helper functions
 │   ├── animation_utils.py      ← 16 animation helpers ✅ Phase 3
 │   ├── umg_utils.py            ← 18 UMG helpers          ✅ Phase 4
 │   ├── sequencer_utils.py      ← 14 sequencer helpers    ✅ Phase 4
 │   ├── editor_widget_utils.py  ← 17 EUW helpers + panel  ✅ Phase 5
+│   ├── gas_utils.py            ← 17 GAS helpers          ✅ Phase 6
+│   ├── eqs_utils.py            ← 15 EQS helpers          ✅ Phase 6
+│   ├── navmesh_utils.py        ← 16 NavMesh helpers      ✅ Phase 6
 │   ├── bulk_compile_blueprints.py
 │   ├── import_fbx_batch.py
 │   ├── setup_character_bp.py
@@ -634,4 +773,4 @@ ueos/
 
 ---
 
-*Last updated: Phase 5 complete — 202 tools*
+*Last updated: Phase 6 complete — 259 tools*
