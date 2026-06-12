@@ -1,9 +1,9 @@
 # UEOS — Unreal Engine Operating System
 
-**Version 4.0.0 — Phase 4 Complete: UMG + Sequencer + Behavior Trees**
+**Version 7.0.0 — Phase 7 Complete: Chaos Physics + PCG + Enhanced Input + MetaSounds**
 
 AI-driven Unreal Engine 5.4 development system. Claude controls the UE editor
-through **182 MCP tools** via the Remote Control API. Zero C++. Pure Python.
+through **339 MCP tools** via the Remote Control API. Zero C++. Pure Python.
 
 ---
 
@@ -63,7 +63,7 @@ Claude Desktop
      │
      │ MCP (stdio)
      ▼
-mcp_server/server.py          ← 259 tools registered
+mcp_server/server.py          ← 339 tools registered
      │
      ├── tools/blueprint.py   ← 17 tools: graph editing, compile, validate
      ├── tools/material.py    ← 14 tools: PBR, dissolve, hologram, Substrate
@@ -76,9 +76,13 @@ mcp_server/server.py          ← 259 tools registered
      ├── tools/sequencer.py   ← 18 tools: Level Sequences, camera cuts, tracks (Phase 4)
      ├── tools/behavior_tree.py ← 17 tools: BT, Blackboard, Tasks, AI pipeline (Phase 4)
      ├── tools/editor_widget.py  ← 20 tools: EUW panels, menus, UEOS panel     (Phase 5)
-     ├── tools/gameplay_ability.py ← 20 tools: GAS, AttributeSets, Effects, Cues  ← NEW Phase 6
-     ├── tools/environment_query.py ← 20 tools: EQS queries, generators, tests   ← NEW Phase 6
-     └── tools/navmesh.py         ← 17 tools: NavMesh, NavAreas, Links, AI move ← NEW Phase 6
+     ├── tools/gameplay_ability.py ← 20 tools: GAS, AttributeSets, Effects, Cues (Phase 6)
+     ├── tools/environment_query.py ← 20 tools: EQS queries, generators, tests  (Phase 6)
+     ├── tools/navmesh.py         ← 17 tools: NavMesh, NavAreas, Links, AI move (Phase 6)
+     ├── tools/chaos_physics.py   ← 25 tools: GeometryCollections, Fracture, Cloth, Fields ← NEW Phase 7
+     ├── tools/pcg.py             ← 21 tools: PCG Graphs, samplers, spawners, volumes       ← NEW Phase 7
+     ├── tools/enhanced_input.py  ← 18 tools: InputActions, IMCs, presets, player binding   ← NEW Phase 7
+     └── tools/metasound.py       ← 17 tools: MetaSound Source/Patch, attenuation, LFO, bus ← NEW Phase 7
      │
      ├── remote_control/client.py  ← UE 5.4 HTTP client w/ retry logic
      ├── api_clients/tripo.py      ← Tripo REST API
@@ -373,7 +377,7 @@ Unreal Engine 5.4
 | Tab | Contents |
 |-----|----------|
 | **Status** | Live connection dots (UE/Tripo/Huanyuan/MetaTailor) · phase summary · Refresh button |
-| **Tools** | Category grid (15 categories · 259 tools) · search box |
+| **Tools** | Category grid (19 categories · 339 tools) · search box |
 | **Log** | Scrollable operation log · Clear/Copy buttons |
 | **Settings** | UE host/port · API key inputs · log level picker · Save/Reset |
 | **Pipeline** | Concept → character one-click launcher · service picker · progress bar |
@@ -499,6 +503,160 @@ nav.ueos_nav_quick_setup(extent=5000.0)
 
 ---
 
+### 💥 Chaos Physics / Destruction Tools (25) — Phase 7
+
+| Tool | Description |
+|------|-------------|
+| `phys_create_geometry_collection` | Convert a Static Mesh into a GeometryCollection asset ready for fracture |
+| `phys_fracture_voronoi` | Apply Voronoi fracture to a GeometryCollection (cell count, seed) |
+| `phys_fracture_clustered` | Apply Clustered Voronoi fracture (cluster count, cells per cluster) |
+| `phys_fracture_slice` | Apply uniform plane-cut fracture (slices X/Y/Z) |
+| `phys_set_damage_thresholds` | Set per-level damage thresholds on a GeometryCollection |
+| `phys_set_cluster_connection_type` | Set cluster connectivity type (none/point/delaunay/minimal/all) |
+| `phys_spawn_geometry_collection` | Place a GeometryCollection actor into the current level |
+| `phys_list_geometry_collections` | List all GeometryCollection assets under a content path |
+| `phys_get_geometry_collection_info` | Inspect bone count, levels, and simulation settings |
+| `phys_create_physics_material` | Create a PhysicalMaterial asset (friction, restitution, density) |
+| `phys_list_physics_materials` | List all PhysicalMaterial assets under a content path |
+| `phys_assign_physics_material` | Assign a PhysicalMaterial to a mesh component on an actor |
+| `phys_create_constraint_actor` | Place a PhysicsConstraintActor between two actors |
+| `phys_list_constraints` | List all PhysicsConstraintActors in the current level |
+| `phys_set_constraint_drives` | Configure linear/angular drive settings on a constraint |
+| `phys_add_cloth_component` | Add a Chaos Cloth component to a Skeletal Mesh actor |
+| `phys_set_cloth_config` | Configure cloth solver, gravity scale, damping, and drag |
+| `phys_create_radial_impulse` | Spawn a RadialForceActor at a location (strength, radius, falloff) |
+| `phys_create_field_system` | Create a FieldSystemActor for force/displacement fields |
+| `phys_set_actor_physics` | Enable simulation + set mass, linear/angular damping on an actor |
+| `phys_apply_impulse` | Apply a one-shot world-space impulse to an actor's root component |
+| `phys_set_collision_profile` | Set collision profile and response channels on a component |
+| `phys_set_break_event_notify` | Toggle break-event notifications on a GeometryCollection actor |
+| `phys_reset_geometry_collection` | Reset a fractured GeometryCollection to its initial state |
+| `phys_diagnostics` | Chaos health-check: GC counts, simulation states, material assignments |
+
+**Quick Chaos destruction setup from UE Python console:**
+```python
+import sys, importlib
+sys.path.insert(0, r"C:\UEOS\ue_scripts")
+import chaos_utils as chaos; importlib.reload(chaos)
+chaos.ueos_chaos_quick_setup("/Game/Meshes/SM_Wall", "/Game/Chaos")
+# Converts SM_Wall → GeometryCollection, Voronoi fractures (20 cells),
+# sets damage thresholds, and places actor in level
+```
+
+---
+
+### 🌿 Procedural Content Generation Tools (21) — Phase 7
+
+| Tool | Description |
+|------|-------------|
+| `pcg_create_graph` | Create a new PCGGraph asset at a content path |
+| `pcg_list_graphs` | List all PCGGraph assets under a content path |
+| `pcg_get_graph_info` | Inspect nodes and edges in a PCGGraph |
+| `pcg_duplicate_graph` | Duplicate a PCGGraph to a new name/location |
+| `pcg_delete_graph` | Delete a PCGGraph asset |
+| `pcg_add_surface_sampler` | Add a Surface Sampler node (point density, seed) |
+| `pcg_add_static_mesh_spawner` | Add a Static Mesh Spawner node (mesh list, density filter) |
+| `pcg_add_actor_spawner` | Add an Actor Spawner node (actor class, spawn settings) |
+| `pcg_add_density_filter` | Add a Density Filter node (lower/upper bound thresholds) |
+| `pcg_add_attribute_node` | Add an Attribute node (set/get/copy PCG attributes) |
+| `pcg_add_transform_points` | Add a Transform Points node (position/rotation/scale offset) |
+| `pcg_add_noise_node` | Add a Density Noise node (frequency, amplitude, seed) |
+| `pcg_add_spline_sampler` | Add a Spline Sampler node (sample along spline, spacing) |
+| `pcg_place_volume` | Place a PCGVolume actor linked to a PCGGraph in the level |
+| `pcg_list_volumes` | List all PCGVolume actors in the current level |
+| `pcg_execute_graph` | Trigger immediate PCG generation on a volume actor |
+| `pcg_cleanup_volume` | Clear all PCG-generated instances from a volume actor |
+| `pcg_create_biome_preset` | Create a complete biome PCGGraph (surface sampler + mesh spawner + density filter) |
+| `pcg_set_landscape_layer_weight` | Add landscape layer weight input node for biome blending |
+| `pcg_get_point_stats` | Return point count and bounding box stats from a PCG volume |
+| `pcg_diagnostics` | PCG health-check: graph count, orphan volumes, execution errors |
+
+**Quick PCG biome setup from UE Python console:**
+```python
+import sys, importlib
+sys.path.insert(0, r"C:\UEOS\ue_scripts")
+import pcg_utils as pcg; importlib.reload(pcg)
+pcg.ueos_pcg_quick_setup(
+    mesh_paths=["/Game/Meshes/SM_Oak", "/Game/Meshes/SM_Pine"],
+    save_path="/Game/PCG", biome_name="ForestBiome"
+)
+# Creates PCGGraph with surface sampler + spawner + density filter,
+# places PCGVolume in level, and triggers generation
+```
+
+---
+
+### 🎮 Enhanced Input Tools (18) — Phase 7
+
+| Tool | Description |
+|------|-------------|
+| `inp_create_input_action` | Create an InputAction asset (value type: bool/axis1D/axis2D/axis3D) |
+| `inp_list_input_actions` | List all InputAction assets under a content path |
+| `inp_get_action_info` | Inspect triggers, modifiers, and value type of an InputAction |
+| `inp_set_action_triggers` | Set triggers on an InputAction (pressed/released/hold/tap/pulse) |
+| `inp_add_action_modifier` | Add a modifier to an InputAction (dead_zone/negate/scale/smooth/swizzle) |
+| `inp_create_mapping_context` | Create an InputMappingContext asset |
+| `inp_list_mapping_contexts` | List all InputMappingContext assets under a content path |
+| `inp_add_key_mapping` | Add a key-to-action mapping in an IMC (with optional modifiers) |
+| `inp_remove_key_mapping` | Remove a key-to-action mapping from an IMC |
+| `inp_get_imc_mappings` | List all key mappings in an InputMappingContext |
+| `inp_add_imc_to_blueprint` | Wire an IMC into a Blueprint's BeginPlay via EnhancedInputSubsystem |
+| `inp_set_default_player_mappings` | Set default IMC + priority on the player controller class |
+| `inp_create_character_input_set` | Preset: create full character IMC (WASD/look/jump/sprint/crouch) |
+| `inp_create_vehicle_input_set` | Preset: create vehicle IMC (throttle/brake/steer/handbrake/camera) |
+| `inp_create_ui_input_set` | Preset: create UI navigation IMC (navigate/confirm/cancel/scroll) |
+| `inp_list_available_keys` | List available input keys by group (gamepad/keyboard/mouse/vr) |
+| `inp_set_project_default_imc` | Set the project-level default IMC in EnhancedInput developer settings |
+| `inp_diagnostics` | Enhanced Input health-check: IMC count, orphan actions, project default |
+
+**Quick Enhanced Input character setup from UE Python console:**
+```python
+import sys, importlib
+sys.path.insert(0, r"C:\UEOS\ue_scripts")
+import input_utils as inp; importlib.reload(inp)
+inp.ueos_input_quick_setup("/Game/Input")
+# Creates IA_Move/IA_Look/IA_Jump/IA_Sprint/IA_Crouch InputActions
+# + IMC_Default with WASD/mouse/gamepad bindings
+# + wires IMC into EnhancedInput project defaults
+```
+
+---
+
+### 🔊 MetaSound Tools (17) — Phase 7
+
+| Tool | Description |
+|------|-------------|
+| `snd_create_metasound_source` | Create a MetaSoundSource asset (sample rate, channels, one-shot/looping) |
+| `snd_create_metasound_patch` | Create a MetaSoundPatch asset for reusable signal graph fragments |
+| `snd_list_metasounds` | List all MetaSoundSource/Patch assets under a content path |
+| `snd_get_metasound_info` | Inspect parameters, graph node count, and sample rate |
+| `snd_duplicate_metasound` | Duplicate a MetaSound to a new name/location |
+| `snd_add_parameter` | Add an exposed input parameter (float/bool/trigger/wave/int) |
+| `snd_list_parameters` | List all exposed parameters on a MetaSound asset |
+| `snd_create_simple_tone` | Preset builder: sine-wave tone source with Frequency + Volume params |
+| `snd_create_wave_player` | Preset builder: WavePlayer source with wave asset + pitch/volume params |
+| `snd_create_randomised_source` | Preset builder: randomised pitch+volume wave player (footsteps/impacts) |
+| `snd_create_attenuation` | Create a SoundAttenuation asset (inner radius, falloff, spatialisation) |
+| `snd_list_attenuations` | List all SoundAttenuation assets under a content path |
+| `snd_create_modulator_lfo` | Create a SoundModulatorLFO asset (frequency, amplitude, waveform) |
+| `snd_create_control_bus` | Create a SoundControlBus (mix bus for volume/pitch group control) |
+| `snd_create_sound_class` | Create a SoundClass asset (volume, pitch, concurrency settings) |
+| `snd_assign_to_audio_component` | Assign a MetaSoundSource to an AudioComponent on a level actor |
+| `snd_diagnostics` | MetaSound health-check: source/patch counts, orphan params, attenuations |
+
+**Quick MetaSound audio setup from UE Python console:**
+```python
+import sys, importlib
+sys.path.insert(0, r"C:\UEOS\ue_scripts")
+import metasound_utils as ms; importlib.reload(ms)
+ms.ueos_audio_quick_setup("/Game/Audio")
+# Creates SFX/Music/Ambient SoundClasses + Master SoundControlBus
+# + MS_FootstepBase + MS_ImpactBase randomised sources
+# + ATT_Character and ATT_Ambient attenuations
+```
+
+---
+
 ### 🚀 Pipeline Tools (8)
 
 | Tool | Description |
@@ -533,9 +691,13 @@ Pre-built scripts in `ue_scripts/` that run INSIDE the UE editor:
 | `umg_utils.py` | 18 | Widget builders, HUD presets, style helpers |
 | `sequencer_utils.py` | 14 | Cutscene builder, camera dolly, fade/audio tracks |
 | `editor_widget_utils.py` | 17 | EUW builder, UEOS panel, menus, status bar (Phase 5) |
-| `gas_utils.py` | 17 | GAS scaffold, AttributeSet/Ability/Effect/Cue creators ← NEW |
-| `eqs_utils.py` | 15 | EQS query presets (cover/flank/patrol/retreat/attack) ← NEW |
-| `navmesh_utils.py` | 16 | NavMesh setup, path queries, nav areas, AI speed ← NEW |
+| `gas_utils.py` | 17 | GAS scaffold, AttributeSet/Ability/Effect/Cue creators (Phase 6) |
+| `eqs_utils.py` | 15 | EQS query presets (cover/flank/patrol/retreat/attack) (Phase 6) |
+| `navmesh_utils.py` | 16 | NavMesh setup, path queries, nav areas, AI speed (Phase 6) |
+| `chaos_utils.py` | 14 | Chaos GC create/fracture/thresholds, physics material, constraints ← NEW |
+| `pcg_utils.py` | 9 | PCG biome graph, blank graph, place/execute/cleanup volume ← NEW |
+| `input_utils.py` | 9 | Enhanced Input quick setup, create action/IMC, key mappings ← NEW |
+| `metasound_utils.py` | 10 | MetaSound source/footstep/music, attenuation, LFO, sound class ← NEW |
 | `bulk_compile_blueprints.py` | — | Compile all BPs under path |
 | `import_fbx_batch.py` | — | Batch FBX import with full options |
 | `setup_character_bp.py` | — | Complete Character BP with mesh/anim/clothing |
@@ -614,7 +776,8 @@ UEOS_LOG_LEVEL=INFO
 | **Total** | | | **202** |
 | Phase 6 | ✅ Complete | GAS (20): Abilities, Effects, AttributeSets, Cues · EQS (20): queries, generators, tests · NavMesh (17): paths, areas, links | 57 |
 | **Total** | | | **259** |
-| Phase 7 | ⏳ Planned | Physics (Chaos), Procedural Content Generation (PCG), Enhanced Input, Metasounds | TBD |
+| Phase 7 | ✅ Complete | Chaos Physics (25): GeometryCollections, fracture, cloth, fields · PCG (21): graphs, samplers, spawners, volumes, diagnostics · Enhanced Input (18): actions, IMCs, presets · MetaSounds (17): sources, attenuation, LFO, bus | 81 |
+| **Total** | | | **339** |
 
 ---
 
@@ -709,6 +872,28 @@ UEOS_LOG_LEVEL=INFO
 
 "Place a NavLinkProxy jump link from (0,0,0) to (200,0,300) direction both_ways.
  Then run nav diagnostics and report all issues."
+
+"Create a destructible wall: convert SM_BrickWall at /Game/Meshes into a
+ GeometryCollection at /Game/Chaos. Voronoi fracture with 30 cells.
+ Set level-0 damage threshold to 500. Place the actor at (0, 200, 0)."
+
+"Set up a forest biome PCG graph at /Game/PCG. Use SM_Oak and SM_Pine meshes.
+ Surface sampler density 3.0, scale 0.8–1.2. Place a PCGVolume 5000×5000 at
+ the world origin and generate it immediately."
+
+"Create a complete Enhanced Input setup for a third-person character at /Game/Input.
+ Generate IA_Move (axis2D), IA_Look (axis2D), IA_Jump (bool), IA_Sprint (bool),
+ IA_Crouch (bool). Create IMC_Default, bind WASD+mouse+gamepad.
+ Wire IMC_Default into BP_ThirdPersonCharacter's BeginPlay."
+
+"Build a MetaSound footstep system at /Game/Audio. Create MS_Footstep_Concrete
+ and MS_Footstep_Grass as randomised sources. Set pitch variance ±3 semitones,
+ volume variance ±4 dB. Create ATT_Footstep attenuation (inner 100, falloff 600).
+ Assign MS_Footstep_Concrete to the AudioComponent on BP_Character."
+
+"Full physics sandbox: create a RadialForce actor at (0,0,500) with strength 8000
+ and radius 1200. Simulate physics on SM_Crate_01 at (200,0,0). Then apply a
+ 5000N upward impulse on SM_Barrel_01 at (-200,0,0). Run phys_diagnostics.""
 ```
 
 ---
@@ -727,7 +912,7 @@ ueos/
 │   ├── __init__.py
 │   └── launcher.py             ← 5-tab tkinter GUI (993 lines)
 ├── mcp_server/
-│   ├── server.py               ← MCP entry point (259 tools)
+│   ├── server.py               ← MCP entry point (339 tools)
 │   ├── remote_control/
 │   │   └── client.py           ← UE 5.4 HTTP client w/ retry
 │   ├── api_clients/
@@ -748,7 +933,11 @@ ueos/
 │       ├── editor_widget.py    ← 20 tools ✅ Phase 5
 │       ├── gameplay_ability.py ← 20 tools ✅ Phase 6
 │       ├── environment_query.py ← 20 tools ✅ Phase 6
-│       └── navmesh.py          ← 17 tools ✅ Phase 6
+│       ├── navmesh.py          ← 17 tools ✅ Phase 6
+│       ├── chaos_physics.py    ← 25 tools ✅ Phase 7
+│       ├── pcg.py              ← 21 tools ✅ Phase 7
+│       ├── enhanced_input.py   ← 18 tools ✅ Phase 7
+│       └── metasound.py        ← 17 tools ✅ Phase 7
 ├── ue_scripts/                 ← Run INSIDE UE editor
 │   ├── ueos_utils.py           ← 40+ helper functions
 │   ├── animation_utils.py      ← 16 animation helpers ✅ Phase 3
@@ -758,6 +947,10 @@ ueos/
 │   ├── gas_utils.py            ← 17 GAS helpers          ✅ Phase 6
 │   ├── eqs_utils.py            ← 15 EQS helpers          ✅ Phase 6
 │   ├── navmesh_utils.py        ← 16 NavMesh helpers      ✅ Phase 6
+│   ├── chaos_utils.py          ← 14 Chaos helpers        ✅ Phase 7
+│   ├── pcg_utils.py            ← 9  PCG helpers          ✅ Phase 7
+│   ├── input_utils.py          ← 9  Enhanced Input helpers ✅ Phase 7
+│   ├── metasound_utils.py      ← 10 MetaSound helpers    ✅ Phase 7
 │   ├── bulk_compile_blueprints.py
 │   ├── import_fbx_batch.py
 │   ├── setup_character_bp.py
@@ -773,4 +966,4 @@ ueos/
 
 ---
 
-*Last updated: Phase 6 complete — 259 tools*
+*Last updated: Phase 7 complete — 339 tools*

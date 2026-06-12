@@ -519,8 +519,9 @@ async def handle_status() -> list[types.TextContent]:
     lines.append("  Blueprint:17   Material:14   Niagara:20")
     lines.append("  Inspection:12  Scene:16      Data:15")
     lines.append("  Animation:22   UMG:20        Sequencer:18")
-    lines.append("  BehaviorTree:17  EditorWidget:20  Pipeline:8")
-    lines.append("  Diagnostics:3")
+    lines.append("  BehaviorTree:17  EditorWidget:20  GAS:20")
+    lines.append("  EQS:20  NavMesh:17  ChaosPhysics:25  PCG:20")
+    lines.append("  EnhancedInput:18  MetaSound:17  Pipeline:8  Diagnostics:3")
     lines.append("═══════════════════════════════════════════")
 
     return [types.TextContent(type="text", text="\n".join(lines))]
@@ -840,7 +841,7 @@ async def handle_full_pipeline(args: dict) -> list[types.TextContent]:
 
 async def main():
     log.info("═══════════════════════════════════════════")
-    log.info("  UEOS MCP Server v6.0 — Phase 6 Complete")
+    log.info("  UEOS MCP Server v7.0 — Phase 7 Complete")
     log.info("  Unreal Engine Operating System")
     log.info("═══════════════════════════════════════════")
     log.info(f"  UE Remote:    {ue.host}:{ue.port}")
@@ -852,8 +853,9 @@ async def main():
     log.info("          Animation(22) UMG(20) Sequencer(18)")
     log.info("          BehaviorTree(17) EditorWidget(20)")
     log.info("          GameplayAbility(20) EnvironmentQuery(20) NavMesh(17)")
+    log.info("          ChaosPhysics(25) PCG(20) EnhancedInput(18) MetaSound(17)")
     log.info("          Pipeline(8) Diagnostics(3)")
-    log.info("          ── Total: 259 tools ──")
+    log.info("          ── Total: 339 tools ──")
     log.info("═══════════════════════════════════════════")
 
     async with stdio_server() as (read_stream, write_stream):
