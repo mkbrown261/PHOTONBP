@@ -202,17 +202,18 @@ echo.
 echo %BOLD%[4/5] Checking Unreal Engine connection...%RESET%
 echo.
 
-python setup\check_ue.py
-if %errorlevel% equ 0 (
-    echo %GREEN%  ✓ Unreal Engine 5.4 detected — Remote Control API active%RESET%
+python setup\check_ue.py >nul 2>&1
+set UE_CHECK=%errorlevel%
+if %UE_CHECK% equ 0 (
+    echo %GREEN%  ✓ Unreal Engine detected — Remote Control API active%RESET%
 ) else (
-    echo %YELLOW%  ! Unreal Engine not detected (that's OK for now)%RESET%
+    echo %YELLOW%  ! Unreal Engine not detected right now ^(that's OK^)%RESET%
     echo.
-    echo %DIM%  When you're ready to connect UE:%RESET%
-    echo %DIM%    1. Open Unreal Engine 5.4%RESET%
-    echo %DIM%    2. Edit → Plugins → search "Remote Control API" → Enable → Restart%RESET%
-    echo %DIM%    3. Edit → Plugins → search "Python Editor Script Plugin" → Enable → Restart%RESET%
-    echo %DIM%    4. That's it — port 30010 opens automatically%RESET%
+    echo %DIM%  To connect UE later:%RESET%
+    echo %DIM%    1. Open Unreal Engine 5.x%RESET%
+    echo %DIM%    2. Edit → Plugins → enable "Remote Control API"%RESET%
+    echo %DIM%    3. Edit → Plugins → enable "Python Editor Script Plugin"%RESET%
+    echo %DIM%    4. Restart UE — port 30010 opens automatically%RESET%
 )
 echo.
 
