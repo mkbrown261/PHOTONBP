@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
 UEOS — Unreal Engine Operating System
-MCP Server Entry Point — Phase 3
+MCP Server Entry Point — Phase 4
 
-Version: 3.0.0
+Version: 4.0.0
 
 Connects Claude Desktop to Unreal Engine 5.4 via:
   - Remote Control API (HTTP, port 30010)
@@ -12,20 +12,23 @@ Connects Claude Desktop to Unreal Engine 5.4 via:
   - Huanyuan3D API (image → 3D)
   - MetaTailor API (auto-rigging + clothing)
 
-Phase 3 tools registered:
-  Blueprint   17 tools
-  Material    14 tools
-  Niagara     20 tools
-  Inspection  12 tools
-  Scene       16 tools
-  Data        15 tools
-  Animation   22 tools  ← NEW Phase 3
-  ─────────────────────
-  Subtotal   116 UE tools
-  Pipeline     8 extra tools (Tripo/Huanyuan/MetaTailor/status)
-  Diagnostics  3 tools
-  ─────────────────────
-  Total      127 tools
+Phase 4 tools registered:
+  Blueprint      17 tools
+  Material       14 tools
+  Niagara        20 tools
+  Inspection     12 tools
+  Scene          16 tools
+  Data           15 tools
+  Animation      22 tools  (Phase 3)
+  UMG            20 tools  ← NEW Phase 4
+  Sequencer      18 tools  ← NEW Phase 4
+  BehaviorTree   17 tools  ← NEW Phase 4
+  ─────────────────────────
+  Subtotal      171 UE tools
+  Pipeline        8 extra tools (Tripo/Huanyuan/MetaTailor/status)
+  Diagnostics     3 tools
+  ─────────────────────────
+  Total         182 tools
 """
 
 import asyncio
@@ -78,7 +81,8 @@ from tools.data       import DataTools
 from tools.umg        import UMGTools
 from tools.sequencer  import SequencerTools
 from tools.inspection import InspectionTools
-from tools.scene      import SceneTools
+from tools.scene          import SceneTools
+from tools.behavior_tree  import BehaviorTreeTools
 
 # ── API Clients ───────────────────────────────────────────────────────────────
 from api_clients.tripo       import TripoClient
@@ -122,8 +126,9 @@ niagara_tools    = NiagaraTools(ue)
 animation_tools  = AnimationTools(ue)
 data_tools       = DataTools(ue)
 umg_tools        = UMGTools(ue)
-sequencer_tools  = SequencerTools(ue)
-inspection_tools = InspectionTools(ue)
+sequencer_tools     = SequencerTools(ue)
+behavior_tree_tools = BehaviorTreeTools(ue)
+inspection_tools    = InspectionTools(ue)
 scene_tools      = SceneTools(ue)
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -144,8 +149,9 @@ async def list_tools() -> list[types.Tool]:
     tools.extend(await niagara_tools.get_tool_definitions())     # 20
     tools.extend(await animation_tools.get_tool_definitions())   # Phase 3 — 22 tools
     tools.extend(await data_tools.get_tool_definitions())        # 15
-    tools.extend(await umg_tools.get_tool_definitions())         # stub
-    tools.extend(await sequencer_tools.get_tool_definitions())   # stub
+    tools.extend(await umg_tools.get_tool_definitions())             # Phase 4 — 20 tools
+    tools.extend(await sequencer_tools.get_tool_definitions())         # Phase 4 — 18 tools
+    tools.extend(await behavior_tree_tools.get_tool_definitions())     # Phase 4 — 17 tools
     tools.extend(await inspection_tools.get_tool_definitions())  # 12
     tools.extend(await scene_tools.get_tool_definitions())       # 16
 
@@ -401,6 +407,8 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
             return await umg_tools.handle(name, arguments)
         elif name.startswith("sequencer_"):
             return await sequencer_tools.handle(name, arguments)
+        elif name.startswith("bt_"):
+            return await behavior_tree_tools.handle(name, arguments)
         elif name.startswith("inspect_"):
             return await inspection_tools.handle(name, arguments)
         elif name.startswith("scene_"):
@@ -466,8 +474,8 @@ async def handle_status() -> list[types.TextContent]:
 
     lines = [
         "═══════════════════════════════════════════",
-        "  UEOS v2.0 — Unreal Engine Operating System",
-        "  Phase 3 Complete: 127 tools registered",
+        "  UEOS v4.0 — Unreal Engine Operating System",
+        "  Phase 4 Complete: 182 tools registered",
         "═══════════════════════════════════════════",
     ]
     if not tripo_configured:
@@ -484,9 +492,10 @@ async def handle_status() -> list[types.TextContent]:
             if k in info:
                 lines.append(f"      {k.capitalize():12s}: {info[k]}")
     lines.append("═══════════════════════════════════════════")
-    lines.append("  Blueprint:14   Material:14   Niagara:20")
+    lines.append("  Blueprint:17   Material:14   Niagara:20")
     lines.append("  Inspection:12  Scene:16      Data:15")
-    lines.append("  Pipeline:8     Diagnostics:3")
+    lines.append("  Animation:22   UMG:20        Sequencer:18")
+    lines.append("  BehaviorTree:17  Pipeline:8  Diagnostics:3")
     lines.append("═══════════════════════════════════════════")
 
     return [types.TextContent(type="text", text="\n".join(lines))]
@@ -806,7 +815,7 @@ async def handle_full_pipeline(args: dict) -> list[types.TextContent]:
 
 async def main():
     log.info("═══════════════════════════════════════════")
-    log.info("  UEOS MCP Server v3.0 — Phase 3 Complete")
+    log.info("  UEOS MCP Server v4.0 — Phase 4 Complete")
     log.info("  Unreal Engine Operating System")
     log.info("═══════════════════════════════════════════")
     log.info(f"  UE Remote:    {ue.host}:{ue.port}")
@@ -815,7 +824,9 @@ async def main():
     log.info(f"  MetaTailor:   {'✓' if metatailor.api_key else '✗ NOT configured'}")
     log.info("  Tools:  Blueprint(17) Material(14) Niagara(20)")
     log.info("          Inspection(12) Scene(16) Data(15)")
-    log.info("          Pipeline(8) Diagnostics(3) = 105 total")
+    log.info("          Animation(22) UMG(20) Sequencer(18)")
+    log.info("          BehaviorTree(17) Pipeline(8) Diagnostics(3)")
+    log.info("          ── Total: 182 tools ──")
     log.info("═══════════════════════════════════════════")
 
     async with stdio_server() as (read_stream, write_stream):

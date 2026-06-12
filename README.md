@@ -1,9 +1,9 @@
 # UEOS — Unreal Engine Operating System
 
-**Version 3.0.0 — Phase 3 Animation Complete + GUI Launcher**
+**Version 4.0.0 — Phase 4 Complete: UMG + Sequencer + Behavior Trees**
 
 AI-driven Unreal Engine 5.4 development system. Claude controls the UE editor
-through 127 MCP tools via the Remote Control API. Zero C++. Pure Python.
+through **182 MCP tools** via the Remote Control API. Zero C++. Pure Python.
 
 ---
 
@@ -63,7 +63,7 @@ Claude Desktop
      │
      │ MCP (stdio)
      ▼
-mcp_server/server.py          ← 127 tools registered
+mcp_server/server.py          ← 182 tools registered
      │
      ├── tools/blueprint.py   ← 17 tools: graph editing, compile, validate
      ├── tools/material.py    ← 14 tools: PBR, dissolve, hologram, Substrate
@@ -71,9 +71,10 @@ mcp_server/server.py          ← 127 tools registered
      ├── tools/inspection.py  ← 12 tools: deep JSON inspection of any asset
      ├── tools/scene.py       ← 16 tools: lights, fog, PPV, camera, actors
      ├── tools/data.py        ← 15 tools: Structs, Enums, DataTables, Curves
-     ├── tools/animation.py   ← 22 tools: AnimBP, State Machines, Montages, BlendSpaces, IK ← NEW
-     ├── tools/umg.py         ← stub (Phase 4)
-     └── tools/sequencer.py   ← stub (Phase 4)
+     ├── tools/animation.py   ← 22 tools: AnimBP, State Machines, Montages, BlendSpaces, IK
+     ├── tools/umg.py         ← 20 tools: Widget BPs, HUDs, menus, 5 presets  ← NEW Phase 4
+     ├── tools/sequencer.py   ← 18 tools: Level Sequences, camera cuts, tracks ← NEW Phase 4
+     └── tools/behavior_tree.py ← 17 tools: BT, Blackboard, Tasks, AI pipeline ← NEW Phase 4
      │
      ├── remote_control/client.py  ← UE 5.4 HTTP client w/ retry logic
      ├── api_clients/tripo.py      ← Tripo REST API
@@ -219,7 +220,7 @@ Unreal Engine 5.4
 `vector` `vector2d` `vector4` `rotator` `transform` `color` `linear_color` `quat`
 `soft_object` `soft_class` `object` `class` `actor` `gameplay_tag` `datetime` `guid`
 
-### 🎬 Animation Tools (22) — NEW Phase 3
+### 🎬 Animation Tools (22)
 
 | Tool | Description |
 |------|-------------|
@@ -248,6 +249,96 @@ Unreal Engine 5.4
 
 **Blend Space axis presets:** `speed` `direction` `yaw` `lean` `aim_pitch` `aim_yaw`
 
+---
+
+### 🖼️ UMG Widget Tools (20) — NEW Phase 4
+
+| Tool | Description |
+|------|-------------|
+| `umg_create_widget` | Create a new WidgetBlueprint asset |
+| `umg_add_text` | Add TextBlock widget to canvas panel |
+| `umg_add_button` | Add Button widget with child label text |
+| `umg_add_image` | Add Image widget, optionally bind Texture2D |
+| `umg_add_progress_bar` | Add ProgressBar with fill color and percent |
+| `umg_add_slider` | Add Slider widget with min/max/value |
+| `umg_add_input_field` | Add EditableTextBox input widget |
+| `umg_add_checkbox` | Add CheckBox widget with label |
+| `umg_add_combobox` | Add ComboBoxString with option list |
+| `umg_add_scroll_box` | Add ScrollBox container widget |
+| `umg_add_canvas_panel` | Add nested CanvasPanel |
+| `umg_add_horizontal_box` | Add HorizontalBox layout container |
+| `umg_add_vertical_box` | Add VerticalBox layout container |
+| `umg_add_overlay` | Add Overlay container widget |
+| `umg_add_named_slot` | Add NamedSlot for child widget injection |
+| `umg_bind_variable` | Add Blueprint variable for data binding |
+| `umg_add_widget_animation` | Add named UMG animation track |
+| `umg_set_widget_style` | Update style properties (font, color, size) |
+| `umg_create_hud` | Build complete HUD from preset template |
+| `umg_compile_widget` | Compile and save WidgetBlueprint |
+
+**HUD presets:** `fps` · `rpg` · `main_menu` · `pause_menu` · `inventory`
+
+**Anchor presets:** `top_left` · `top_center` · `top_right` · `center_left` · `center` · `center_right` · `bottom_left` · `bottom_center` · `bottom_right` · `full_stretch`
+
+---
+
+### 🎥 Sequencer Tools (18) — NEW Phase 4
+
+| Tool | Description |
+|------|-------------|
+| `seq_create_sequence` | Create new LevelSequence asset with fps/duration |
+| `seq_set_playback_range` | Set start/end frames on a sequence |
+| `seq_add_camera_cut_track` | Add CameraCutTrack to sequence |
+| `seq_add_camera_cut` | Add camera cut section (start→end, camera binding) |
+| `seq_add_actor_track` | Bind a world actor to the sequence |
+| `seq_add_transform_key` | Set location/rotation/scale keyframe on actor binding |
+| `seq_add_property_track` | Add bool/float/color property track on actor component |
+| `seq_add_property_key` | Set property value keyframe on property track |
+| `seq_add_audio_track` | Add audio track to sequence |
+| `seq_add_audio_section` | Place SoundBase at time offset with volume/pitch |
+| `seq_add_fade_track` | Add MovieSceneFadeTrack (black screen in/out) |
+| `seq_add_fade_key` | Set fade alpha value at frame |
+| `seq_add_sub_sequence` | Embed child LevelSequence as sub-sequence track |
+| `seq_add_event_track` | Add event track for Blueprint event triggers |
+| `seq_add_event_key` | Add event key at frame to fire Blueprint event |
+| `seq_list_tracks` | List all tracks in a sequence (type, sections) |
+| `seq_get_info` | Full sequence info: fps, range, bindings, tracks |
+| `seq_play_in_editor` | Open sequence in Sequencer and play in editor |
+
+---
+
+### 🌲 Behavior Tree Tools (17) — NEW Phase 4
+
+| Tool | Description |
+|------|-------------|
+| `bt_create_blackboard` | Create BlackboardData asset |
+| `bt_add_blackboard_key` | Add typed key to Blackboard (object/vector/bool/float/int/string/name) |
+| `bt_get_blackboard_keys` | Read all keys from a Blackboard |
+| `bt_create_behavior_tree` | Create BehaviorTree asset, optionally bind Blackboard |
+| `bt_add_selector` | Add Selector composite node (tries children until one succeeds) |
+| `bt_add_sequence` | Add Sequence composite node (runs children in order) |
+| `bt_add_parallel` | Add SimpleParallel composite node |
+| `bt_add_task` | Add built-in task node (MoveTo, Wait, RotateTo, etc.) |
+| `bt_add_decorator` | Add decorator to composite (Blackboard check, Loop, Timer, etc.) |
+| `bt_add_service` | Add service to composite (run on tick while active) |
+| `bt_create_custom_task` | Create new BTTask_BlueprintBase asset with custom logic |
+| `bt_create_custom_decorator` | Create new BTDecorator_BlueprintBase asset |
+| `bt_create_custom_service` | Create new BTService_BlueprintBase asset |
+| `bt_set_ai_controller` | Configure AIController on a Character Blueprint |
+| `bt_get_tree_info` | Inspect BT structure: composites, tasks, decorators |
+| `bt_create_ai_character` | Create full AI character: BP + Controller + BT + BB |
+| `bt_create_patrol_tree` | Build complete patrol Behavior Tree in one call |
+
+**Built-in tasks:** `move_to` · `wait` · `rotate_to` · `run_eqs` · `play_anim` · `play_sound` · `clear_bb_value` · `make_noise` · `move_directly_toward` · `set_bb_value` · `finish_with_result`
+
+**Built-in decorators:** `blackboard` · `loop` · `timer` · `cone_check` · `force_success` · `does_path_exist` · `is_at_location` · `cooldown` · `gameplay_tag` · `compare_bb_entries` · `time_limit`
+
+**Built-in services:** `default_focus` · `run_eqs` · `update_cooldown` · `gameplay_tag_condition`
+
+**Blackboard key types:** `object` · `vector` · `bool` · `float` · `int` · `string` · `name` · `enum` · `rotator` · `class`
+
+---
+
 ### 🚀 Pipeline Tools (8)
 
 | Tool | Description |
@@ -275,16 +366,18 @@ Unreal Engine 5.4
 
 Pre-built scripts in `ue_scripts/` that run INSIDE the UE editor:
 
-| Script | Purpose |
-|--------|---------|
-| `ueos_utils.py` | 40+ helper functions (assets, BPs, materials, actors, data) |
-| `animation_utils.py` | 16 animation helpers: locomotion SM, attack pipeline, footsteps, IK ← NEW |
-| `bulk_compile_blueprints.py` | Compile all BPs under path |
-| `import_fbx_batch.py` | Batch FBX import with full options |
-| `setup_character_bp.py` | Complete Character BP with mesh/anim/clothing |
-| `material_instance_factory.py` | Batch Material Instance creation |
-| `datatable_batch_ops.py` | Merge/export/import/search DataTables |
-| `scene_snapshot.py` | Full level JSON snapshot |
+| Script | Public Functions | Purpose |
+|--------|-----------------|---------|
+| `ueos_utils.py` | 40+ | General helpers: assets, BPs, materials, actors, data |
+| `animation_utils.py` | 16 | Locomotion SM, attack pipeline, footsteps, IK |
+| `umg_utils.py` | 18 | Widget builders, HUD presets, style helpers ← NEW |
+| `sequencer_utils.py` | 14 | Cutscene builder, camera dolly, fade/audio tracks ← NEW |
+| `bulk_compile_blueprints.py` | — | Compile all BPs under path |
+| `import_fbx_batch.py` | — | Batch FBX import with full options |
+| `setup_character_bp.py` | — | Complete Character BP with mesh/anim/clothing |
+| `material_instance_factory.py` | — | Batch Material Instance creation |
+| `datatable_batch_ops.py` | — | Merge/export/import/search DataTables |
+| `scene_snapshot.py` | — | Full level JSON snapshot |
 
 **Using from a UEOS tool:**
 ```python
@@ -346,13 +439,14 @@ UEOS_LOG_LEVEL=INFO
 
 ## Phase Status
 
-| Phase | Status | Scope |
-|-------|--------|-------|
-| Phase 1 | ✅ Complete | Blueprint (17), Tripo, Huanyuan3D, MetaTailor, Pipeline |
-| Phase 2 | ✅ Complete | Material (14), Niagara (20), Inspection (12), Scene (16), Data (15) |
-| Phase 3 | ✅ Complete | Animation (22): AnimBP, State Machines, BlendSpaces, Montages, Notifies, IK |
-| Phase 4 | ⏳ Next | UMG Widgets, Sequencer, Behavior Trees, Blackboards |
-| Phase 5 | ⏳ Planned | Native UE Editor Utility Widget panel (connection status, tool browser) |
+| Phase | Status | Scope | Tools |
+|-------|--------|-------|-------|
+| Phase 1 | ✅ Complete | Blueprint (17), Pipeline (8+3), GUI Launcher | 28 |
+| Phase 2 | ✅ Complete | Material (14), Niagara (20), Inspection (12), Scene (16), Data (15) | 77 |
+| Phase 3 | ✅ Complete | Animation (22): AnimBP, State Machines, BlendSpaces, Montages, IK | 22 |
+| Phase 4 | ✅ Complete | UMG (20), Sequencer (18), Behavior Trees (17) | 55 |
+| **Total** | | | **182** |
+| Phase 5 | ⏳ Planned | Native UE Editor Utility Widget panel (connection status, tool browser) | TBD |
 
 ---
 
@@ -393,6 +487,24 @@ UEOS_LOG_LEVEL=INFO
 
 "Create IKRig IK_Mannequin for SK_Mannequin_Skeleton.
  Add foot IK goals: LeftFoot on foot_l, RightFoot on foot_r."
+
+"Build an FPS HUD WBP_PlayerHUD at /Game/UI with health bar, 
+ stamina bar, ammo counter, crosshair, and minimap slot."
+
+"Create a Main Menu WBP_MainMenu at /Game/UI/Menus with 
+ Play, Settings, and Quit buttons. Use the main_menu preset."
+
+"Create a Level Sequence LS_BossIntro at /Game/Cinematics, 10 seconds, 
+ 30fps. Add camera cut track for CineCameraActor_0. Add fade in (1s) 
+ and fade out (1s). Add background music from /Game/Audio/Boss_Theme."
+
+"Create a complete AI character: BP_Guard with AIController, 
+ Blackboard with TargetActor/PatrolTarget/bIsAlerted keys, 
+ and a patrol BehaviorTree at /Game/AI."
+
+"Build a patrol Behavior Tree BT_Guard at /Game/AI.
+ Blackboard: /Game/AI/BB_Guard.
+ Patrol waypoints with random wait, alert on sight with MoveTo chase."
 ```
 
 ---
@@ -401,31 +513,39 @@ UEOS_LOG_LEVEL=INFO
 
 ```
 ueos/
-├── .env                       ← Live config (never committed)
-├── .env.example               ← Template
+├── .env                        ← Live config (never committed)
+├── .env.example                ← Template
 ├── .gitignore
 ├── requirements.txt
 ├── README.md
+├── UEOS.bat                    ← Windows double-click launcher
+├── ui/
+│   ├── __init__.py
+│   └── launcher.py             ← 5-tab tkinter GUI (993 lines)
 ├── mcp_server/
-│   ├── server.py              ← MCP entry point (127 tools)
+│   ├── server.py               ← MCP entry point (182 tools)
 │   ├── remote_control/
-│   │   └── client.py          ← UE 5.4 HTTP client w/ retry
+│   │   └── client.py           ← UE 5.4 HTTP client w/ retry
 │   ├── api_clients/
 │   │   ├── tripo.py
 │   │   ├── huanyuan.py
 │   │   └── metatailor.py
 │   └── tools/
-│       ├── blueprint.py       ← 17 tools ✅
-│       ├── material.py        ← 14 tools ✅
-│       ├── niagara.py         ← 20 tools ✅
-│       ├── inspection.py      ← 12 tools ✅
-│       ├── scene.py           ← 16 tools ✅
-│       ├── data.py            ← 15 tools ✅ NEW
-│       ├── animation.py       ← stub (Phase 3)
-│       ├── umg.py             ← stub (Phase 4)
-│       └── sequencer.py       ← stub (Phase 4)
-├── ue_scripts/                ← Run INSIDE UE editor ✅ NEW
-│   ├── ueos_utils.py          ← 40+ helper functions
+│       ├── blueprint.py        ← 17 tools ✅
+│       ├── material.py         ← 14 tools ✅
+│       ├── niagara.py          ← 20 tools ✅
+│       ├── inspection.py       ← 12 tools ✅
+│       ├── scene.py            ← 16 tools ✅
+│       ├── data.py             ← 15 tools ✅
+│       ├── animation.py        ← 22 tools ✅ Phase 3
+│       ├── umg.py              ← 20 tools ✅ Phase 4
+│       ├── sequencer.py        ← 18 tools ✅ Phase 4
+│       └── behavior_tree.py    ← 17 tools ✅ Phase 4
+├── ue_scripts/                 ← Run INSIDE UE editor
+│   ├── ueos_utils.py           ← 40+ helper functions
+│   ├── animation_utils.py      ← 16 animation helpers ✅ Phase 3
+│   ├── umg_utils.py            ← 18 UMG helpers       ✅ Phase 4
+│   ├── sequencer_utils.py      ← 14 sequencer helpers ✅ Phase 4
 │   ├── bulk_compile_blueprints.py
 │   ├── import_fbx_batch.py
 │   ├── setup_character_bp.py
@@ -441,4 +561,4 @@ ueos/
 
 ---
 
-*Last updated: Phase 2 complete — commit b52fa8b*
+*Last updated: Phase 4 complete — 182 tools*
