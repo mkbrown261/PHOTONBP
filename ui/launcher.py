@@ -3,8 +3,10 @@
 UEOS Launcher — GUI Control Panel
 Native Windows/macOS desktop app using tkinter (built into Python, no install needed).
 
-Tabs:
-  Dashboard   — live connection status for all services, Start/Stop server
+Tabs (first-run):
+  Setup Wizard — numbered checklist: Python / UE Plugins / Claude / API Keys / Test
+Tabs (normal):
+  Dashboard   — health bar + live connection status, Start/Stop server
   API Keys    — Tripo / Huanyuan / MetaTailor key entry with show/hide + live validate
   Settings    — UE host/port, temp dir, log level
   Claude      — auto-detect claude_desktop_config.json, one-click inject MCP config
@@ -28,16 +30,24 @@ import urllib.error
 import time
 import webbrowser
 from pathlib import Path
+import platform
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Paths
 # ─────────────────────────────────────────────────────────────────────────────
 
-ROOT       = Path(__file__).parent.parent
-ENV_FILE   = ROOT / ".env"
-EXAMPLE    = ROOT / ".env.example"
-SERVER_PY  = ROOT / "mcp_server" / "server.py"
-LOG_FILE   = ROOT / "mcp_server" / "ueos.log"
+ROOT          = Path(__file__).parent.parent
+ENV_FILE      = ROOT / ".env"
+EXAMPLE       = ROOT / ".env.example"
+SERVER_PY     = ROOT / "mcp_server" / "server.py"
+LOG_FILE      = ROOT / "mcp_server" / "ueos.log"
+SETUP_MARKER  = ROOT / ".setup_complete"
+
+def setup_is_complete() -> bool:
+    return SETUP_MARKER.exists()
+
+def mark_setup_complete():
+    SETUP_MARKER.write_text("1", encoding="utf-8")
 
 # Claude Desktop config locations
 CLAUDE_CONFIGS = [
@@ -156,22 +166,24 @@ class UEOSLauncher(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("UEOS — Unreal Engine Operating System")
-        self.geometry("860x620")
-        self.minsize(760, 560)
+        self.geometry("860x640")
+        self.minsize(760, 580)
         self.configure(bg=BG)
         self.resizable(True, True)
 
         # State
-        self.env_values    = read_env()
-        self.server_proc   = None
-        self._log_after    = None
-        self._status_after = None
+        self.env_values       = read_env()
+        self.server_proc      = None
+        self._log_after       = None
+        self._status_after    = None
+        self._wizard_tab_index = 0   # set in _build_tabs if wizard exists
 
         # Style
         self._apply_style()
 
         # Build UI
         self._build_header()
+        self._build_health_bar()
         self._build_tabs()
 
         # Initial status poll
@@ -267,6 +279,121 @@ class UEOSLauncher(tk.Tk):
         self.header_status_lbl.pack(side="right", padx=20)
 
     # ──────────────────────────────────────────────────────────────────────
+    # Health Bar  (persistent strip below header)
+    # ──────────────────────────────────────────────────────────────────────
+
+    def _build_health_bar(self):
+        """Persistent coloured strip showing UE / Claude MCP / Python status."""
+        self._hbar = tk.Frame(self, bg=ACCENT, height=32)
+        self._hbar.pack(fill="x", side="top")
+        self._hbar.pack_propagate(False)
+
+        # Three pill indicators: Python | UE | Claude MCP
+        self._hbar_pills = {}
+        pill_defs = [
+            ("python",  "🐍 Python"),
+            ("ue",      "🎮 UE 5.4"),
+            ("claude",  "🤖 Claude MCP"),
+        ]
+        left = tk.Frame(self._hbar, bg=ACCENT)
+        left.pack(side="left", padx=(12, 0), fill="y")
+
+        for key, label in pill_defs:
+            pill = tk.Frame(left, bg=ACCENT)
+            pill.pack(side="left", padx=(0, 4), pady=5)
+
+            dot = tk.Label(pill, text="●", font=("Segoe UI", 9),
+                           bg=ACCENT, fg=TEXT_DIM)
+            dot.pack(side="left", padx=(4, 2))
+
+            lbl = tk.Label(pill, text=label, font=("Segoe UI", 9),
+                           bg=ACCENT, fg=TEXT_DIM)
+            lbl.pack(side="left", padx=(0, 6))
+
+            self._hbar_pills[key] = {"dot": dot, "lbl": lbl}
+
+        # Right side: fix button (hidden unless something is wrong)
+        self._hbar_fix_btn = ttk.Button(
+            self._hbar, text="⚡ Fix Issues",
+            style="Secondary.TButton",
+            command=self._show_wizard_tab)
+        self._hbar_fix_btn.pack(side="right", padx=12, pady=4)
+        self._hbar_fix_btn.pack_forget()  # hidden by default
+
+        # Schedule first health check
+        self.after(600, self._refresh_health_bar)
+
+    def _set_pill(self, key: str, ok: bool, msg: str = ""):
+        pill = self._hbar_pills.get(key)
+        if not pill:
+            return
+        color = GREEN if ok else RED
+        pill["dot"].configure(fg=color)
+        pill["lbl"].configure(fg=WHITE if ok else RED)
+        if msg:
+            pill["lbl"].configure(text=msg)
+
+    def _refresh_health_bar(self):
+        """Re-check all three health indicators in background threads."""
+        def _check_python():
+            v = sys.version_info
+            ok = v.major >= 3 and v.minor >= 10
+            label = f"🐍 Python {v.major}.{v.minor}"
+            self.after(0, lambda: self._set_pill("python", ok, label))
+
+        def _check_ue():
+            env = read_env()
+            host = env.get("UE_REMOTE_CONTROL_HOST", "127.0.0.1")
+            port = int(env.get("UE_REMOTE_CONTROL_PORT", 30010))
+            ok, _ = check_ue(host, port)
+            label = "🎮 UE 5.4 ✓" if ok else "🎮 UE 5.4 ✗"
+            self.after(0, lambda: self._set_pill("ue", ok, label))
+
+        def _check_claude():
+            try:
+                setup_dir = str(ROOT / "setup")
+                if setup_dir not in sys.path:
+                    sys.path.insert(0, setup_dir)
+                from inject_claude_config import find_claude_config
+                p = find_claude_config()
+                if p and p.exists():
+                    data = json.loads(p.read_text(encoding="utf-8"))
+                    configured = "ueos" in data.get("mcpServers", {})
+                else:
+                    configured = False
+            except Exception:
+                configured = False
+            label = "🤖 Claude MCP ✓" if configured else "🤖 Claude MCP ✗"
+            self.after(0, lambda: self._set_pill("claude", configured, label))
+            # Show fix button if anything is wrong
+            self.after(0, self._update_fix_button)
+
+        threading.Thread(target=_check_python, daemon=True).start()
+        threading.Thread(target=_check_ue,     daemon=True).start()
+        threading.Thread(target=_check_claude, daemon=True).start()
+
+        # Re-check every 60 seconds
+        self.after(60000, self._refresh_health_bar)
+
+    def _update_fix_button(self):
+        """Show the Fix Issues button if any pill is red."""
+        any_red = any(
+            p["dot"].cget("fg") == RED
+            for p in self._hbar_pills.values()
+        )
+        if any_red:
+            self._hbar_fix_btn.pack(side="right", padx=12, pady=4)
+        else:
+            self._hbar_fix_btn.pack_forget()
+
+    def _show_wizard_tab(self):
+        """Switch to the Setup Wizard tab."""
+        try:
+            self.notebook.select(self._wizard_tab_index)
+        except Exception:
+            pass
+
+    # ──────────────────────────────────────────────────────────────────────
     # Tabs
     # ──────────────────────────────────────────────────────────────────────
 
@@ -274,11 +401,321 @@ class UEOSLauncher(tk.Tk):
         self.notebook = ttk.Notebook(self)
         self.notebook.pack(fill="both", expand=True, padx=0, pady=0)
 
+        # Prepend wizard tab on first run (before setup_complete marker exists)
+        if not setup_is_complete():
+            self._build_wizard_tab()
+            self._wizard_tab_index = 0
+
         self._build_dashboard_tab()
         self._build_apikeys_tab()
         self._build_settings_tab()
         self._build_claude_tab()
         self._build_log_tab()
+
+    # ──────────────────────────────────────────────────────────────────────
+    # Tab 0 — Setup Wizard  (first-run only)
+    # ──────────────────────────────────────────────────────────────────────
+
+    def _build_wizard_tab(self):
+        frame = ttk.Frame(self.notebook, style="TFrame")
+        self.notebook.add(frame, text="  ⚡ Setup  ")
+
+        # Scrollable canvas
+        canvas = tk.Canvas(frame, bg=BG2, highlightthickness=0)
+        scroll = ttk.Scrollbar(frame, orient="vertical", command=canvas.yview)
+        inner  = tk.Frame(canvas, bg=BG2)
+        inner.bind("<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=inner, anchor="nw")
+        canvas.configure(yscrollcommand=scroll.set)
+        canvas.pack(side="left", fill="both", expand=True)
+        scroll.pack(side="right", fill="y")
+
+        # Title
+        tk.Label(inner, text="Welcome to UEOS!",
+                 font=("Segoe UI", 16, "bold"), bg=BG2, fg=WHITE
+                 ).pack(anchor="w", padx=24, pady=(20, 2))
+        tk.Label(inner,
+                 text="Complete these steps once and you're ready to control Unreal Engine with Claude.",
+                 font=FONT_SMALL, bg=BG2, fg=TEXT_DIM
+                 ).pack(anchor="w", padx=24, pady=(0, 16))
+
+        # Step state storage
+        self._wiz_steps = {}   # key → {status_var, status_lbl, row_frame}
+
+        # ── Step definitions ────────────────────────────────────────────
+        steps = [
+            {
+                "key":   "python",
+                "num":   "1",
+                "title": "Python 3.10+",
+                "desc":  "The runtime UEOS needs. Already installed if you're seeing this.",
+                "auto":  True,
+                "check": self._wiz_check_python,
+                "fix":   None,   # nothing to fix — Python is running
+            },
+            {
+                "key":   "deps",
+                "num":   "2",
+                "title": "Python Dependencies",
+                "desc":  "mcp, aiohttp, python-dotenv — installed automatically.",
+                "auto":  True,
+                "check": self._wiz_check_deps,
+                "fix":   self._wiz_fix_deps,
+            },
+            {
+                "key":   "ue_plugins",
+                "num":   "3",
+                "title": "Unreal Engine Plugins",
+                "desc":  'In UE: Edit → Plugins → enable "Remote Control API" + "Python Editor Script Plugin" → restart UE.',
+                "auto":  False,
+                "check": self._wiz_check_ue,
+                "fix":   self._wiz_open_ue_plugin_guide,
+            },
+            {
+                "key":   "claude",
+                "num":   "4",
+                "title": "Claude Desktop Config",
+                "desc":  "Injects the UEOS server entry into claude_desktop_config.json automatically.",
+                "auto":  True,
+                "check": self._wiz_check_claude,
+                "fix":   self._wiz_fix_claude,
+            },
+            {
+                "key":   "test",
+                "num":   "5",
+                "title": "Test Connection",
+                "desc":  'Ask Claude: "run ueos_status" — you should get a live report back.',
+                "auto":  False,
+                "check": self._wiz_check_ue,   # same UE ping
+                "fix":   None,
+            },
+        ]
+
+        for step in steps:
+            self._build_wizard_step(inner, step)
+
+        # ── Done button ─────────────────────────────────────────────────
+        done_row = tk.Frame(inner, bg=BG2)
+        done_row.pack(fill="x", padx=24, pady=(20, 24))
+        ttk.Button(done_row,
+                   text="✅  I'm all set — go to Dashboard",
+                   style="Green.TButton",
+                   command=self._wizard_complete).pack(side="left")
+        ttk.Button(done_row,
+                   text="🔄  Re-check All Steps",
+                   style="Secondary.TButton",
+                   command=self._wizard_recheck_all).pack(side="left", padx=(12, 0))
+
+        # Auto-run checks
+        self.after(400, self._wizard_recheck_all)
+
+    def _build_wizard_step(self, parent, step: dict):
+        """Build one wizard step row."""
+        key = step["key"]
+
+        row = tk.Frame(parent, bg=ACCENT, pady=14, padx=18)
+        row.pack(fill="x", padx=20, pady=(0, 8))
+
+        # Number badge
+        badge = tk.Label(row, text=step["num"],
+                         font=("Segoe UI", 13, "bold"),
+                         bg=BLUE2, fg=WHITE,
+                         width=3, anchor="center")
+        badge.grid(row=0, column=0, rowspan=2, padx=(0, 14), sticky="ns")
+
+        # Title + description
+        tk.Label(row, text=step["title"],
+                 font=FONT_H2, bg=ACCENT, fg=WHITE
+                 ).grid(row=0, column=1, sticky="w")
+        tk.Label(row, text=step["desc"],
+                 font=FONT_SMALL, bg=ACCENT, fg=TEXT_DIM,
+                 wraplength=480, justify="left"
+                 ).grid(row=1, column=1, sticky="w", pady=(2, 0))
+
+        row.columnconfigure(1, weight=1)
+
+        # Status label
+        status_var = tk.StringVar(value="⏳ Checking…")
+        status_lbl = tk.Label(row, textvariable=status_var,
+                              font=("Segoe UI", 10, "bold"),
+                              bg=ACCENT, fg=YELLOW)
+        status_lbl.grid(row=0, column=2, rowspan=2, padx=(14, 0), sticky="e")
+
+        # Fix / Action button
+        if step["fix"]:
+            fix_label = "Install" if step["key"] == "deps" else (
+                        "Show me how" if step["key"] == "ue_plugins" else
+                        "Auto-fix")
+            fix_btn = ttk.Button(row, text=fix_label,
+                                 style="Secondary.TButton",
+                                 command=step["fix"])
+            fix_btn.grid(row=0, column=3, rowspan=2, padx=(10, 0))
+        elif not step["auto"] and step["key"] == "test":
+            ttk.Button(row, text="Open Claude",
+                       style="Secondary.TButton",
+                       command=lambda: webbrowser.open("https://claude.ai")
+                       ).grid(row=0, column=3, rowspan=2, padx=(10, 0))
+
+        self._wiz_steps[key] = {
+            "status_var": status_var,
+            "status_lbl": status_lbl,
+            "badge":      badge,
+        }
+
+    def _wiz_set_status(self, key: str, ok: bool, msg: str):
+        s = self._wiz_steps.get(key)
+        if not s:
+            return
+        s["status_var"].set(msg)
+        color = GREEN if ok else (YELLOW if "…" in msg else RED)
+        s["status_lbl"].configure(fg=color)
+        s["badge"].configure(bg=GREEN if ok else (BLUE2 if "…" in msg else RED))
+
+    # ── Wizard checks ────────────────────────────────────────────────────
+
+    def _wiz_check_python(self):
+        v = sys.version_info
+        ok = v.major >= 3 and v.minor >= 10
+        msg = f"✓  Python {v.major}.{v.minor}.{v.micro}" if ok else f"✗  Python {v.major}.{v.minor} (need 3.10+)"
+        self.after(0, lambda: self._wiz_set_status("python", ok, msg))
+
+    def _wiz_check_deps(self):
+        try:
+            import mcp, aiohttp, dotenv
+            self.after(0, lambda: self._wiz_set_status("deps", True, "✓  All installed"))
+        except ImportError as e:
+            self.after(0, lambda: self._wiz_set_status("deps", False, f"✗  Missing: {e.name}"))
+
+    def _wiz_check_ue(self):
+        env = read_env()
+        host = env.get("UE_REMOTE_CONTROL_HOST", "127.0.0.1")
+        port = int(env.get("UE_REMOTE_CONTROL_PORT", 30010))
+        ok, _ = check_ue(host, port)
+        msg = "✓  UE connected on port 30010" if ok else "✗  UE not detected — follow step instructions"
+        key = "ue_plugins"
+        self.after(0, lambda: self._wiz_set_status(key, ok, msg))
+        # Also update the test step with same result
+        test_msg = "✓  Ready — try it in Claude!" if ok else "⏳ Waiting for UE connection"
+        self.after(0, lambda: self._wiz_set_status("test", ok, test_msg))
+
+    def _wiz_check_claude(self):
+        try:
+            sys.path.insert(0, str(ROOT / "setup"))
+            from inject_claude_config import find_claude_config
+            p = find_claude_config()
+            if p and p.exists():
+                data = json.loads(p.read_text(encoding="utf-8"))
+                ok = "ueos" in data.get("mcpServers", {})
+            else:
+                ok = False
+        except Exception:
+            ok = False
+        msg = "✓  Config written — restart Claude" if ok else "✗  Not configured yet — click Auto-fix"
+        self.after(0, lambda: self._wiz_set_status("claude", ok, msg))
+
+    # ── Wizard fixes ─────────────────────────────────────────────────────
+
+    def _wiz_fix_deps(self):
+        self._wiz_set_status("deps", False, "⏳ Installing…")
+        def _run():
+            req_file = ROOT / "requirements.txt"
+            result = subprocess.run(
+                [sys.executable, "-m", "pip", "install", "-r", str(req_file)],
+                capture_output=True, text=True
+            )
+            if result.returncode == 0:
+                self.after(0, lambda: self._wiz_set_status("deps", True, "✓  Installed"))
+            else:
+                self.after(0, lambda: self._wiz_set_status("deps", False, "✗  Install failed — see Log tab"))
+                self.after(0, lambda: self._append_log(result.stdout + result.stderr))
+        threading.Thread(target=_run, daemon=True).start()
+
+    def _wiz_open_ue_plugin_guide(self):
+        """Open a simple instructions popup + UE docs link."""
+        win = tk.Toplevel(self)
+        win.title("Enable UE Plugins")
+        win.configure(bg=BG2)
+        win.geometry("520x320")
+        win.resizable(False, False)
+
+        tk.Label(win, text="Enable these two UE plugins",
+                 font=FONT_H2, bg=BG2, fg=WHITE).pack(anchor="w", padx=24, pady=(20, 6))
+
+        steps_text = (
+            "1.  Open Unreal Engine 5.4\n\n"
+            "2.  Go to:  Edit  →  Plugins\n\n"
+            '3.  Search  "Remote Control API"  →  Enable  ✓\n\n'
+            '4.  Search  "Python Editor Script Plugin"  →  Enable  ✓\n\n'
+            "5.  Click  Restart Now\n\n"
+            "6.  That's it — port 30010 opens automatically on every launch."
+        )
+        txt = tk.Text(win, font=FONT_BODY, bg=ACCENT, fg=TEXT,
+                      relief="flat", wrap="word", height=10,
+                      padx=16, pady=12, state="normal")
+        txt.insert("1.0", steps_text)
+        txt.configure(state="disabled")
+        txt.pack(fill="both", expand=True, padx=20, pady=(0, 8))
+
+        btn_row = tk.Frame(win, bg=BG2)
+        btn_row.pack(fill="x", padx=20, pady=(0, 16))
+        ttk.Button(btn_row, text="Open UE Plugin Docs",
+                   style="Secondary.TButton",
+                   command=lambda: webbrowser.open(
+                       "https://docs.unrealengine.com/5.4/en-US/remote-control-api-for-unreal-engine/"
+                   )).pack(side="left")
+        ttk.Button(btn_row, text="Done",
+                   style="Accent.TButton",
+                   command=win.destroy).pack(side="right")
+
+    def _wiz_fix_claude(self):
+        """Auto-inject UEOS into Claude Desktop config."""
+        self._wiz_set_status("claude", False, "⏳ Writing config…")
+        def _run():
+            sys.path.insert(0, str(ROOT / "setup"))
+            try:
+                from inject_claude_config import main as inject_main
+                code = inject_main()
+                if code == 0:
+                    self.after(0, lambda: self._wiz_set_status(
+                        "claude", True, "✓  Done — restart Claude Desktop"))
+                    self.after(0, lambda: messagebox.showinfo(
+                        "Done",
+                        "✅  UEOS added to Claude Desktop!\n\nRestart Claude Desktop to activate.",
+                        parent=self))
+                elif code == 2:
+                    self.after(0, lambda: self._wiz_set_status(
+                        "claude", True, "✓  Already configured"))
+                else:
+                    self.after(0, lambda: self._wiz_set_status(
+                        "claude", False, "✗  Claude Desktop not installed"))
+                    self.after(0, lambda: webbrowser.open("https://claude.ai/download"))
+            except Exception as e:
+                self.after(0, lambda: self._wiz_set_status(
+                    "claude", False, f"✗  Error: {e}"))
+        threading.Thread(target=_run, daemon=True).start()
+
+    # ── Wizard recheck / complete ────────────────────────────────────────
+
+    def _wizard_recheck_all(self):
+        # Reset all to checking
+        for key in self._wiz_steps:
+            self._wiz_set_status(key, False, "⏳ Checking…")
+        threading.Thread(target=self._wiz_check_python, daemon=True).start()
+        threading.Thread(target=self._wiz_check_deps,   daemon=True).start()
+        threading.Thread(target=self._wiz_check_ue,     daemon=True).start()
+        threading.Thread(target=self._wiz_check_claude, daemon=True).start()
+
+    def _wizard_complete(self):
+        mark_setup_complete()
+        # Remove wizard tab and switch to Dashboard
+        try:
+            self.notebook.forget(self._wizard_tab_index)
+        except Exception:
+            pass
+        self.notebook.select(0)
+        # Hide fix button if all green
+        self._hbar_fix_btn.pack_forget()
 
     # ──────────────────────────────────────────────────────────────────────
     # Tab 1 — Dashboard
@@ -368,7 +805,9 @@ class UEOSLauncher(tk.Tk):
         info_frame = tk.Frame(frame, bg=BG2)
         info_frame.pack(fill="x", padx=24, pady=(16, 0))
         tk.Label(info_frame,
-            text="105 MCP Tools  •  Blueprint(17)  •  Material(14)  •  Niagara(20)  •  Scene(16)  •  Data(15)  •  Inspection(12)",
+            text="339 MCP Tools  •  Blueprint(17)  •  Material(14)  •  Niagara(20)  •  Animation(22)  •  UMG(20)  •  Sequencer(18)"
+                 "  •  BehaviorTree(17)  •  EUW(20)  •  GAS(20)  •  EQS(20)  •  NavMesh(17)"
+                 "  •  ChaosPhysics(25)  •  PCG(21)  •  EnhancedInput(18)  •  MetaSound(17)",
             font=FONT_SMALL, bg=BG2, fg=TEXT_DIM).pack(anchor="w")
 
     # ──────────────────────────────────────────────────────────────────────

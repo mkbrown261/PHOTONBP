@@ -1,33 +1,40 @@
 @echo off
+setlocal
 title UEOS Launcher
 cd /d "%~dp0"
 
-:: Check Python is available
+:: ── First-run guard ───────────────────────────────────────────────────────────
+:: If setup has never been run, hand off to SETUP.bat automatically
+if not exist ".setup_complete" (
+    echo.
+    echo  First run detected — launching UEOS Setup...
+    echo.
+    call SETUP.bat
+    exit /b
+)
+
+:: ── Python check ─────────────────────────────────────────────────────────────
 where python >nul 2>&1
 if %errorlevel% neq 0 (
-    echo ERROR: Python not found in PATH.
-    echo Please install Python 3.11+ from https://python.org and re-run.
+    echo.
+    echo  ERROR: Python not found.
+    echo  Please run SETUP.bat to install Python automatically.
+    echo.
     pause
     exit /b 1
 )
 
-:: Check dependencies installed (fast check)
-python -c "import tkinter, aiohttp, dotenv" >nul 2>&1
+:: ── Quick dependency check ───────────────────────────────────────────────────
+python -c "import mcp, aiohttp, dotenv, tkinter" >nul 2>&1
 if %errorlevel% neq 0 (
-    echo Installing UEOS dependencies ...
+    echo  Updating dependencies...
     python -m pip install -r requirements.txt --quiet
-    if %errorlevel% neq 0 (
-        echo ERROR: Dependency installation failed.
-        echo Run manually: pip install -r requirements.txt
-        pause
-        exit /b 1
-    )
 )
 
-:: Launch the GUI (pythonw hides the console window on Windows)
+:: ── Launch GUI ───────────────────────────────────────────────────────────────
 start "" pythonw ui\launcher.py
-
-:: If pythonw isn't available, fall back to python (shows console briefly)
 if %errorlevel% neq 0 (
     python ui\launcher.py
 )
+
+endlocal
