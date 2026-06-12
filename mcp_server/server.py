@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
 UEOS — Unreal Engine Operating System
-MCP Server Entry Point — Phase 2
+MCP Server Entry Point — Phase 3
 
-Version: 2.0.1
+Version: 3.0.0
 
 Connects Claude Desktop to Unreal Engine 5.4 via:
   - Remote Control API (HTTP, port 30010)
@@ -12,19 +12,20 @@ Connects Claude Desktop to Unreal Engine 5.4 via:
   - Huanyuan3D API (image → 3D)
   - MetaTailor API (auto-rigging + clothing)
 
-Phase 2 tools registered:
+Phase 3 tools registered:
   Blueprint   17 tools
   Material    14 tools
   Niagara     20 tools
   Inspection  12 tools
   Scene       16 tools
   Data        15 tools
+  Animation   22 tools  ← NEW Phase 3
   ─────────────────────
-  Subtotal    94 UE tools
+  Subtotal   116 UE tools
   Pipeline     8 extra tools (Tripo/Huanyuan/MetaTailor/status)
   Diagnostics  3 tools
   ─────────────────────
-  Total      105 tools
+  Total      127 tools
 """
 
 import asyncio
@@ -141,7 +142,7 @@ async def list_tools() -> list[types.Tool]:
     tools.extend(await blueprint_tools.get_tool_definitions())   # 17
     tools.extend(await material_tools.get_tool_definitions())    # 14
     tools.extend(await niagara_tools.get_tool_definitions())     # 20
-    tools.extend(await animation_tools.get_tool_definitions())   # stub
+    tools.extend(await animation_tools.get_tool_definitions())   # Phase 3 — 22 tools
     tools.extend(await data_tools.get_tool_definitions())        # 15
     tools.extend(await umg_tools.get_tool_definitions())         # stub
     tools.extend(await sequencer_tools.get_tool_definitions())   # stub
@@ -466,7 +467,7 @@ async def handle_status() -> list[types.TextContent]:
     lines = [
         "═══════════════════════════════════════════",
         "  UEOS v2.0 — Unreal Engine Operating System",
-        "  Phase 2 Complete: 105 tools registered",
+        "  Phase 3 Complete: 127 tools registered",
         "═══════════════════════════════════════════",
     ]
     if not tripo_configured:
@@ -805,7 +806,7 @@ async def handle_full_pipeline(args: dict) -> list[types.TextContent]:
 
 async def main():
     log.info("═══════════════════════════════════════════")
-    log.info("  UEOS MCP Server v2.0 — Phase 2 Complete")
+    log.info("  UEOS MCP Server v3.0 — Phase 3 Complete")
     log.info("  Unreal Engine Operating System")
     log.info("═══════════════════════════════════════════")
     log.info(f"  UE Remote:    {ue.host}:{ue.port}")

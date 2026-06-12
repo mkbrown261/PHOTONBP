@@ -1,9 +1,9 @@
 # UEOS — Unreal Engine Operating System
 
-**Version 2.1.0 — GUI Launcher + Phase 2 Complete**
+**Version 3.0.0 — Phase 3 Animation Complete + GUI Launcher**
 
 AI-driven Unreal Engine 5.4 development system. Claude controls the UE editor
-through 105 MCP tools via the Remote Control API. Zero C++. Pure Python.
+through 127 MCP tools via the Remote Control API. Zero C++. Pure Python.
 
 ---
 
@@ -63,15 +63,15 @@ Claude Desktop
      │
      │ MCP (stdio)
      ▼
-mcp_server/server.py          ← 105 tools registered
+mcp_server/server.py          ← 127 tools registered
      │
      ├── tools/blueprint.py   ← 17 tools: graph editing, compile, validate
      ├── tools/material.py    ← 14 tools: PBR, dissolve, hologram, Substrate
      ├── tools/niagara.py     ← 20 tools: fire, explosion, trail, magic
      ├── tools/inspection.py  ← 12 tools: deep JSON inspection of any asset
      ├── tools/scene.py       ← 16 tools: lights, fog, PPV, camera, actors
-     ├── tools/data.py        ← 15 tools: Structs, Enums, DataTables, Curves ← NEW
-     ├── tools/animation.py   ← stub (Phase 3)
+     ├── tools/data.py        ← 15 tools: Structs, Enums, DataTables, Curves
+     ├── tools/animation.py   ← 22 tools: AnimBP, State Machines, Montages, BlendSpaces, IK ← NEW
      ├── tools/umg.py         ← stub (Phase 4)
      └── tools/sequencer.py   ← stub (Phase 4)
      │
@@ -194,7 +194,7 @@ Unreal Engine 5.4
 | `scene_add_trigger` | Add BoxTriggerVolume |
 | `scene_save_level` | Save current level |
 
-### 🗄️ Data Tools (15) — NEW Phase 2
+### 🗄️ Data Tools (15)
 
 | Tool | Description |
 |------|-------------|
@@ -218,6 +218,35 @@ Unreal Engine 5.4
 `bool` `byte` `int` `int32` `int64` `float` `double` `string` `name` `text`
 `vector` `vector2d` `vector4` `rotator` `transform` `color` `linear_color` `quat`
 `soft_object` `soft_class` `object` `class` `actor` `gameplay_tag` `datetime` `guid`
+
+### 🎬 Animation Tools (22) — NEW Phase 3
+
+| Tool | Description |
+|------|-------------|
+| `anim_create_anim_blueprint` | Create AnimBlueprint for a skeleton |
+| `anim_set_anim_graph_variable` | Add/update variable in AnimBP (Speed, IsFalling, etc.) |
+| `anim_create_state_machine` | Add State Machine node to AnimBP Anim Graph |
+| `anim_add_state` | Add state to State Machine (Idle, Walk, Run, Jump…) |
+| `anim_add_transition` | Add transition rule between two states |
+| `anim_set_state_animation` | Bind AnimSequence or BlendSpace to a state |
+| `anim_add_blend_tree` | Insert weighted blend tree inside a state |
+| `anim_create_blend_space` | Create 2D BlendSpace (Speed × Direction) |
+| `anim_create_blend_space_1d` | Create 1D BlendSpace (single axis) |
+| `anim_add_blend_space_sample` | Add animation sample to BlendSpace |
+| `anim_create_montage` | Create AnimMontage from AnimSequence |
+| `anim_add_montage_section` | Add named section to montage (WindUp, HitFrame…) |
+| `anim_add_montage_notify` | Add AnimNotify to montage track |
+| `anim_set_montage_slot` | Set slot (DefaultSlot, UpperBody, FullBody) |
+| `anim_get_montage_info` | Inspect montage sections, notifies, slots |
+| `anim_list_sequences` | List all AnimSequences for a skeleton |
+| `anim_get_sequence_info` | Get length/rate/notifies for a sequence |
+| `anim_add_notify_to_sequence` | Add AnimNotify to raw AnimSequence |
+| `anim_retarget_pose` | Set retarget pose on skeleton |
+| `anim_create_ik_rig` | Create IKRig Definition asset |
+| `anim_set_ik_goal` | Add IK goal to IKRig (LeftFoot, RightHand…) |
+| `anim_compile_anim_blueprint` | Force compile AnimBP, return errors/warnings |
+
+**Blend Space axis presets:** `speed` `direction` `yaw` `lean` `aim_pitch` `aim_yaw`
 
 ### 🚀 Pipeline Tools (8)
 
@@ -249,6 +278,7 @@ Pre-built scripts in `ue_scripts/` that run INSIDE the UE editor:
 | Script | Purpose |
 |--------|---------|
 | `ueos_utils.py` | 40+ helper functions (assets, BPs, materials, actors, data) |
+| `animation_utils.py` | 16 animation helpers: locomotion SM, attack pipeline, footsteps, IK ← NEW |
 | `bulk_compile_blueprints.py` | Compile all BPs under path |
 | `import_fbx_batch.py` | Batch FBX import with full options |
 | `setup_character_bp.py` | Complete Character BP with mesh/anim/clothing |
@@ -320,8 +350,8 @@ UEOS_LOG_LEVEL=INFO
 |-------|--------|-------|
 | Phase 1 | ✅ Complete | Blueprint (17), Tripo, Huanyuan3D, MetaTailor, Pipeline |
 | Phase 2 | ✅ Complete | Material (14), Niagara (20), Inspection (12), Scene (16), Data (15) |
-| Phase 3 | ⏳ Next | Animation Blueprints, State Machines, Montages, AnimNotify |
-| Phase 4 | ⏳ Planned | UMG Widgets, Sequencer, Behavior Trees, Blackboards |
+| Phase 3 | ✅ Complete | Animation (22): AnimBP, State Machines, BlendSpaces, Montages, Notifies, IK |
+| Phase 4 | ⏳ Next | UMG Widgets, Sequencer, Behavior Trees, Blackboards |
 | Phase 5 | ⏳ Planned | Native UE Editor Utility Widget panel (connection status, tool browser) |
 
 ---
@@ -349,6 +379,20 @@ UEOS_LOG_LEVEL=INFO
 "Full pipeline: take this concept art URL → generate 3D with Tripo →
  rig with MetaTailor → create Character Blueprint BP_Hero at 
  /Game/Characters → compile"
+
+"Create an AnimBlueprint ABP_Hero for /Game/Characters/SK_Hero_Skeleton.
+ Add Speed(float), IsFalling(bool), IsAiming(bool) variables.
+ Build a locomotion state machine with Idle/Walk/Run/Jump/Fall/Land states."
+
+"Create BlendSpace1D BS1D_Speed for SK_Mannequin_Skeleton.
+ Speed axis 0→600. Samples: AS_Idle at 0, AS_Walk at 200, AS_Run at 450."
+
+"Create attack montage AM_SwordSlash_01 from AS_SwordSlash_01.
+ Slot: UpperBody. Add sections WindUp(0.1s), HitFrame(0.35s), Recovery(0.7s).
+ Add hit-window notify state 0.35→0.55s."
+
+"Create IKRig IK_Mannequin for SK_Mannequin_Skeleton.
+ Add foot IK goals: LeftFoot on foot_l, RightFoot on foot_r."
 ```
 
 ---
@@ -363,7 +407,7 @@ ueos/
 ├── requirements.txt
 ├── README.md
 ├── mcp_server/
-│   ├── server.py              ← MCP entry point (105 tools)
+│   ├── server.py              ← MCP entry point (127 tools)
 │   ├── remote_control/
 │   │   └── client.py          ← UE 5.4 HTTP client w/ retry
 │   ├── api_clients/
