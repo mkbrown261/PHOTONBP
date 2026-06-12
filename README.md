@@ -63,7 +63,7 @@ Claude Desktop
      │
      │ MCP (stdio)
      ▼
-mcp_server/server.py          ← 182 tools registered
+mcp_server/server.py          ← 202 tools registered
      │
      ├── tools/blueprint.py   ← 17 tools: graph editing, compile, validate
      ├── tools/material.py    ← 14 tools: PBR, dissolve, hologram, Substrate
@@ -72,9 +72,10 @@ mcp_server/server.py          ← 182 tools registered
      ├── tools/scene.py       ← 16 tools: lights, fog, PPV, camera, actors
      ├── tools/data.py        ← 15 tools: Structs, Enums, DataTables, Curves
      ├── tools/animation.py   ← 22 tools: AnimBP, State Machines, Montages, BlendSpaces, IK
-     ├── tools/umg.py         ← 20 tools: Widget BPs, HUDs, menus, 5 presets  ← NEW Phase 4
-     ├── tools/sequencer.py   ← 18 tools: Level Sequences, camera cuts, tracks ← NEW Phase 4
-     └── tools/behavior_tree.py ← 17 tools: BT, Blackboard, Tasks, AI pipeline ← NEW Phase 4
+     ├── tools/umg.py         ← 20 tools: Widget BPs, HUDs, menus, 5 presets  (Phase 4)
+     ├── tools/sequencer.py   ← 18 tools: Level Sequences, camera cuts, tracks (Phase 4)
+     ├── tools/behavior_tree.py ← 17 tools: BT, Blackboard, Tasks, AI pipeline (Phase 4)
+     └── tools/editor_widget.py  ← 20 tools: EUW panels, menus, UEOS panel    ← NEW Phase 5
      │
      ├── remote_control/client.py  ← UE 5.4 HTTP client w/ retry logic
      ├── api_clients/tripo.py      ← Tripo REST API
@@ -339,6 +340,57 @@ Unreal Engine 5.4
 
 ---
 
+### 🪩 Editor Utility Widget Tools (20) — NEW Phase 5
+
+| Tool | Description |
+|------|-------------|
+| `ew_create_utility_widget` | Create EditorUtilityWidget Blueprint asset |
+| `ew_open_panel` | Open EUW as docked tab in the UE editor |
+| `ew_close_panel` | Close a registered EUW tab |
+| `ew_list_panels` | List all EUW panels in a content path |
+| `ew_add_text_to_panel` | Add TextBlock widget to EUW canvas |
+| `ew_add_button_to_panel` | Add Button with optional on-click Python script |
+| `ew_add_progress_bar_to_panel` | Add ProgressBar (loading/import indicators) |
+| `ew_add_list_view` | Add scrollable item list (ScrollBox + VerticalBox) |
+| `ew_add_tab_widget` | Add WidgetSwitcher tabbed container |
+| `ew_set_panel_title` | Rename the docked tab label |
+| `ew_compile_panel` | Compile and save EUW Blueprint |
+| `ew_add_tool_menu_entry` | Add entry to UE menus (Tools / Window / Help) |
+| `ew_remove_tool_menu_entry` | Remove a custom menu entry |
+| `ew_post_status_bar_message` | Post text + progress to UE status bar |
+| `ew_create_ueos_panel` | **Build the full 5-tab UEOS control panel** in one call |
+| `ew_refresh_ueos_status` | Force-refresh UEOS status indicators in the panel |
+| `ew_add_property_inspector` | Add Details View (property inspector) to an EUW |
+| `ew_add_output_log_widget` | Add scrollable read-only log text widget |
+| `ew_register_on_tick` | Bind Blueprint function to Editor tick event |
+| `ew_unregister_on_tick` | Remove Editor tick binding |
+
+**UEOS Panel — 5 tabs:**
+
+| Tab | Contents |
+|-----|----------|
+| **Status** | Live connection dots (UE/Tripo/Huanyuan/MetaTailor) · phase summary · Refresh button |
+| **Tools** | Category grid (12 categories · 202 tools) · search box |
+| **Log** | Scrollable operation log · Clear/Copy buttons |
+| **Settings** | UE host/port · API key inputs · log level picker · Save/Reset |
+| **Pipeline** | Concept → character one-click launcher · service picker · progress bar |
+
+**Install the panel from UE Python console (no MCP needed):**
+```python
+import sys, importlib
+sys.path.insert(0, r"C:\UEOS\ue_scripts")
+import editor_widget_utils as ewu; importlib.reload(ewu)
+ewu.ueos_install_panel()          # creates + opens panel + adds Tools menu entry
+```
+
+**Or via Claude Desktop:**
+```
+"Create the UEOS control panel"
+→ calls ew_create_ueos_panel() → 5-tab dockable panel opens in UE immediately
+```
+
+---
+
 ### 🚀 Pipeline Tools (8)
 
 | Tool | Description |
@@ -370,8 +422,9 @@ Pre-built scripts in `ue_scripts/` that run INSIDE the UE editor:
 |--------|-----------------|---------|
 | `ueos_utils.py` | 40+ | General helpers: assets, BPs, materials, actors, data |
 | `animation_utils.py` | 16 | Locomotion SM, attack pipeline, footsteps, IK |
-| `umg_utils.py` | 18 | Widget builders, HUD presets, style helpers ← NEW |
-| `sequencer_utils.py` | 14 | Cutscene builder, camera dolly, fade/audio tracks ← NEW |
+| `umg_utils.py` | 18 | Widget builders, HUD presets, style helpers |
+| `sequencer_utils.py` | 14 | Cutscene builder, camera dolly, fade/audio tracks |
+| `editor_widget_utils.py` | 17 | EUW builder, UEOS panel, menus, status bar ← NEW |
 | `bulk_compile_blueprints.py` | — | Compile all BPs under path |
 | `import_fbx_batch.py` | — | Batch FBX import with full options |
 | `setup_character_bp.py` | — | Complete Character BP with mesh/anim/clothing |
@@ -446,7 +499,9 @@ UEOS_LOG_LEVEL=INFO
 | Phase 3 | ✅ Complete | Animation (22): AnimBP, State Machines, BlendSpaces, Montages, IK | 22 |
 | Phase 4 | ✅ Complete | UMG (20), Sequencer (18), Behavior Trees (17) | 55 |
 | **Total** | | | **182** |
-| Phase 5 | ⏳ Planned | Native UE Editor Utility Widget panel (connection status, tool browser) | TBD |
+| Phase 5 | ✅ Complete | Editor Utility Widgets (20): dockable UEOS panel, menus, status bar | 20 |
+| **Total** | | | **202** |
+| Phase 6 | ⏳ Planned | Enhanced Gameplay: GAS (Ability System), EQS (Environment Queries), NavMesh | TBD |
 
 ---
 
@@ -505,6 +560,22 @@ UEOS_LOG_LEVEL=INFO
 "Build a patrol Behavior Tree BT_Guard at /Game/AI.
  Blackboard: /Game/AI/BB_Guard.
  Patrol waypoints with random wait, alert on sight with MoveTo chase."
+
+"Create the UEOS control panel"
+
+"Add a custom Tools menu entry 'Compile All BPs' that compiles
+ every Blueprint under /Game."
+
+"Create a custom editor tool EUW_LightPlacer at /Game/EditorTools with
+ three buttons: Add Point Light, Add Spot Light, Add Directional Light.
+ Each button runs the matching scene_ tool on click."
+
+"Build an editor progress panel EUW_ImportStatus at /Game/EditorTools.
+ Add a progress bar ImportProgress, a TextBlock StatusLabel,
+ and a Cancel button. Open it as a docked tab."
+
+"Post a status bar message: 'UEOS: Importing 42 assets… 67%'
+ with progress 0.67."
 ```
 
 ---
@@ -523,7 +594,7 @@ ueos/
 │   ├── __init__.py
 │   └── launcher.py             ← 5-tab tkinter GUI (993 lines)
 ├── mcp_server/
-│   ├── server.py               ← MCP entry point (182 tools)
+│   ├── server.py               ← MCP entry point (202 tools)
 │   ├── remote_control/
 │   │   └── client.py           ← UE 5.4 HTTP client w/ retry
 │   ├── api_clients/
@@ -540,12 +611,14 @@ ueos/
 │       ├── animation.py        ← 22 tools ✅ Phase 3
 │       ├── umg.py              ← 20 tools ✅ Phase 4
 │       ├── sequencer.py        ← 18 tools ✅ Phase 4
-│       └── behavior_tree.py    ← 17 tools ✅ Phase 4
+│       ├── behavior_tree.py    ← 17 tools ✅ Phase 4
+│       └── editor_widget.py    ← 20 tools ✅ Phase 5
 ├── ue_scripts/                 ← Run INSIDE UE editor
 │   ├── ueos_utils.py           ← 40+ helper functions
 │   ├── animation_utils.py      ← 16 animation helpers ✅ Phase 3
-│   ├── umg_utils.py            ← 18 UMG helpers       ✅ Phase 4
-│   ├── sequencer_utils.py      ← 14 sequencer helpers ✅ Phase 4
+│   ├── umg_utils.py            ← 18 UMG helpers          ✅ Phase 4
+│   ├── sequencer_utils.py      ← 14 sequencer helpers    ✅ Phase 4
+│   ├── editor_widget_utils.py  ← 17 EUW helpers + panel  ✅ Phase 5
 │   ├── bulk_compile_blueprints.py
 │   ├── import_fbx_batch.py
 │   ├── setup_character_bp.py
@@ -561,4 +634,4 @@ ueos/
 
 ---
 
-*Last updated: Phase 4 complete — 182 tools*
+*Last updated: Phase 5 complete — 202 tools*
