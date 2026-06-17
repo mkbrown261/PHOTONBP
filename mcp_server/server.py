@@ -185,6 +185,16 @@ async def list_tools() -> list[types.Tool]:
     ))
 
     tools.append(types.Tool(
+        name="ueos_diagnose",
+        description=(
+            "Raw HTTP diagnostic tool. Fires a direct PUT to UE Remote Control API and "
+            "returns the EXACT response: status code, headers, and full body. "
+            "Use this when ueos_status fails — it shows exactly what UE is rejecting and why."
+        ),
+        inputSchema={"type": "object", "properties": {}, "required": []}
+    ))
+
+    tools.append(types.Tool(
         name="ueos_run_python",
         description=(
             "Execute arbitrary Python code directly inside the Unreal Engine 5.4 editor. "
@@ -383,6 +393,8 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
         # ── Diagnostics ───────────────────────────────────────────────────
         if name == "ueos_status":
             return await handle_status()
+        elif name == "ueos_diagnose":
+            return await handle_diagnose()
         elif name == "ueos_run_python":
             return await handle_run_python(arguments)
         elif name == "ueos_batch_execute":
@@ -451,6 +463,64 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
 # ─────────────────────────────────────────────────────────────────────────────
 # Handler implementations
 # ─────────────────────────────────────────────────────────────────────────────
+
+async def handle_diagnose() -> list[types.TextContent]:
+    """
+    Fire raw HTTP requests at the UE Remote Control API and return
+    the exact status code + full response body for each — no parsing,
+    no truncation. Used to diagnose HTTP 400 / 403 / 404 errors.
+    """
+    import aiohttp
+    base = f"http://{ue.host}:{ue.port}"
+    results = []
+
+    tests = [
+        # 1. GET /remote/info — should always work if RC is running
+        ("GET", "/remote/info", None),
+        # 2. PUT /remote/object/call — the actual Python execution call
+        ("PUT", "/remote/object/call", {
+            "objectPath":   "/Script/PythonScriptPlugin.Default__PythonScriptLibrary",
+            "functionName": "ExecutePythonScript",
+            "parameters":   {"PythonScript": "print('UEOS_DIAG:ok')"}
+        }),
+        # 3. PUT /remote/object/call via EditorLevelLibrary — alternative path
+        ("PUT", "/remote/object/call", {
+            "objectPath":   "/Script/EditorScriptingUtilities.Default__EditorLevelLibrary",
+            "functionName": "GetAllLevelActors",
+            "parameters":   {}
+        }),
+    ]
+
+    labels = [
+        "GET /remote/info",
+        "PUT /remote/object/call (PythonScriptLibrary)",
+        "PUT /remote/object/call (EditorLevelLibrary)",
+    ]
+
+    timeout = aiohttp.ClientTimeout(total=10, connect=5)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        for (method, endpoint, payload), label in zip(tests, labels):
+            url = f"{base}{endpoint}"
+            try:
+                kwargs = {"json": payload} if payload else {}
+                meth = getattr(session, method.lower())
+                async with meth(url, **kwargs) as resp:
+                    body = await resp.text()
+                    results.append(
+                        f"[{label}]\n"
+                        f"  Status : {resp.status}\n"
+                        f"  Headers: {dict(resp.headers)}\n"
+                        f"  Body   : {body}\n"
+                    )
+            except Exception as e:
+                results.append(
+                    f"[{label}]\n"
+                    f"  EXCEPTION: {type(e).__name__}: {e}\n"
+                )
+
+    output = "═══ UEOS RAW DIAGNOSTIC ═══\n\n" + "\n".join(results)
+    return [types.TextContent(type="text", text=output)]
+
 
 async def handle_status() -> list[types.TextContent]:
     """Check all service connections and tool counts."""
