@@ -43,52 +43,68 @@ REQUIRED_SETTINGS = {
 
 # ── Find UE projects ──────────────────────────────────────────────────────────
 
+def _glob_limited(root: Path, max_depth: int, seen: set, found: list):
+    """
+    Walk root looking for .uproject files up to max_depth levels deep.
+    Never uses ** glob (which scans entire drives). Uses os.scandir instead.
+    """
+    try:
+        with os.scandir(root) as it:
+            for entry in it:
+                try:
+                    if entry.is_file(False) and entry.name.endswith(".uproject"):
+                        ini_path = Path(entry.path).parent / "Config" / "DefaultEngine.ini"
+                        key = str(ini_path).lower()
+                        if key not in seen:
+                            seen.add(key)
+                            found.append(ini_path)
+                    elif entry.is_dir(False) and max_depth > 0:
+                        # Skip hidden dirs, system dirs, and known time-wasters
+                        skip = {"$recycle.bin", "windows", "program files",
+                                "program files (x86)", "programdata", "system volume information",
+                                "node_modules", ".git", "__pycache__", "appdata"}
+                        if entry.name.lower() not in skip and not entry.name.startswith("."):
+                            _glob_limited(Path(entry.path), max_depth - 1, seen, found)
+                except (PermissionError, OSError):
+                    continue
+    except (PermissionError, OSError):
+        pass
+
+
 def find_ue_projects() -> list[Path]:
     """
     Search common locations for Unreal Engine projects.
     Returns list of DefaultEngine.ini paths found.
+    Never scans entire drives — only known project locations, max 4 levels deep.
     """
-    search_roots = []
-
-    # Standard locations
     home = Path.home()
     docs = home / "Documents"
-    onedrive_docs = home / "OneDrive" / "Documents"
 
-    for base in [docs, onedrive_docs, home / "Desktop", home]:
-        ue_projects = base / "Unreal Projects"
-        if ue_projects.exists():
-            search_roots.append(ue_projects)
-        # Also check the base itself for project folders
-        search_roots.append(base)
+    # Specific high-probability folders — checked first, shallow scan
+    priority_roots = [
+        docs / "Unreal Projects",
+        home / "OneDrive" / "Documents" / "Unreal Projects",
+        home / "Desktop",
+        docs,
+        home / "OneDrive" / "Documents",
+    ]
 
-    # Also check drive roots for UEOS or Unreal folders
+    # Drive-level folders that commonly hold UE projects — 3 levels max
+    drive_subfolders = ["Unreal Projects", "UE5", "UE4", "Games", "Projects", "Dev"]
     for drive in ["C:\\", "D:\\", "E:\\"]:
-        p = Path(drive)
-        if p.exists():
-            search_roots.append(p)
+        dp = Path(drive)
+        if dp.exists():
+            for sub in drive_subfolders:
+                candidate = dp / sub
+                if candidate.exists():
+                    priority_roots.append(candidate)
 
-    found = []
-    seen = set()
+    found: list[Path] = []
+    seen:  set[str]   = set()
 
-    for root in search_roots:
-        try:
-            # Look for .uproject files up to 3 levels deep
-            for uproject in root.glob("**/*.uproject"):
-                # Limit depth to avoid scanning entire drives too deep
-                rel = uproject.relative_to(root)
-                if len(rel.parts) > 4:
-                    continue
-
-                project_dir = uproject.parent
-                ini_path = project_dir / "Config" / "DefaultEngine.ini"
-
-                key = str(ini_path).lower()
-                if key not in seen:
-                    seen.add(key)
-                    found.append(ini_path)
-        except (PermissionError, OSError):
-            continue
+    for root in priority_roots:
+        if root.exists():
+            _glob_limited(root, max_depth=4, seen=seen, found=found)
 
     return found
 

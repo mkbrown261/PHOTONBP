@@ -226,6 +226,7 @@ echo.
 echo %BOLD%[4/5] Configuring Unreal Engine projects...%RESET%
 echo.
 
+:: Timeout after 30 seconds — drive scans should never hang setup
 python setup\inject_ue_settings.py
 set UE_PATCH=%errorlevel%
 
