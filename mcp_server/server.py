@@ -53,21 +53,22 @@ def _check_first_run():
     """
     If .env is missing or Tripo key is blank, print a helpful message.
     Server still starts — tools that need keys will return a clear error.
+    All output goes to stderr so it never corrupts the MCP JSON stream.
     """
     if not ENV_FILE.exists():
-        print("=" * 55, flush=True)
-        print("  UEOS: No .env file found.", flush=True)
-        print("  Run: python setup/configure.py", flush=True)
-        print("=" * 55, flush=True)
+        print("=" * 55, file=sys.stderr, flush=True)
+        print("  UEOS: No .env file found.", file=sys.stderr, flush=True)
+        print("  Run: python setup/configure.py", file=sys.stderr, flush=True)
+        print("=" * 55, file=sys.stderr, flush=True)
         return
 
     tripo_key = os.getenv("TRIPO_API_KEY", "").strip()
     if not tripo_key:
-        print("=" * 55, flush=True)
-        print("  UEOS: Tripo API key not configured.", flush=True)
-        print("  Run: python setup/configure.py --tripo", flush=True)
-        print("  3D generation tools will return errors until set.", flush=True)
-        print("=" * 55, flush=True)
+        print("=" * 55, file=sys.stderr, flush=True)
+        print("  UEOS: Tripo API key not configured.", file=sys.stderr, flush=True)
+        print("  Run: python setup/configure.py --tripo", file=sys.stderr, flush=True)
+        print("  3D generation tools will return errors until set.", file=sys.stderr, flush=True)
+        print("=" * 55, file=sys.stderr, flush=True)
 
 _check_first_run()
 
@@ -106,7 +107,7 @@ logging.basicConfig(
     level=os.getenv("UEOS_LOG_LEVEL", "INFO"),
     format="%(asctime)s [UEOS] %(levelname)s: %(message)s",
     handlers=[
-        logging.StreamHandler(sys.stdout),
+        logging.StreamHandler(sys.stderr),
         logging.FileHandler(str(_LOG_FILE), encoding="utf-8")
     ]
 )
