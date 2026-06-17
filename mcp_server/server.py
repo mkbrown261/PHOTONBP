@@ -464,62 +464,363 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
 # Handler implementations
 # ─────────────────────────────────────────────────────────────────────────────
 
-async def handle_diagnose() -> list[types.TextContent]:
+async def handle_diagnose() -> list[types.TextContent]:  # noqa: C901
     """
-    Fire raw HTTP requests at the UE Remote Control API and return
-    the exact status code + full response body for each — no parsing,
-    no truncation. Used to diagnose HTTP 400 / 403 / 404 errors.
+    Full-chain diagnostic. Tests every layer from TCP socket to Python
+    round-trip execution. Each step records PASS / FAIL / SKIP with the
+    exact raw data received. A single-line verdict at the end names the
+    broken layer and the precise fix required.
     """
+    import asyncio
+    import socket
+    import json as _json
+    import os
     import aiohttp
-    base = f"http://{ue.host}:{ue.port}"
-    results = []
 
-    tests = [
-        # 1. GET /remote/info — should always work if RC is running
-        ("GET", "/remote/info", None),
-        # 2. PUT /remote/object/call — the actual Python execution call
-        ("PUT", "/remote/object/call", {
+    host = ue.host
+    port = ue.port
+    base = f"http://{host}:{port}"
+    lines: list[str] = []
+    verdict = "UNKNOWN"
+
+    def section(title: str):
+        lines.append("")
+        lines.append(f"── {title} {'─' * max(0, 55 - len(title))}")
+
+    def ok(msg: str):
+        lines.append(f"  ✅  {msg}")
+
+    def fail(msg: str):
+        lines.append(f"  ❌  {msg}")
+
+    def info(msg: str):
+        lines.append(f"  ℹ️   {msg}")
+
+    def raw(label: str, value: str):
+        lines.append(f"  📄  {label}: {value}")
+
+    lines.append("╔══════════════════════════════════════════════════════╗")
+    lines.append("║          UEOS FULL-CHAIN DIAGNOSTIC                  ║")
+    lines.append("╚══════════════════════════════════════════════════════╝")
+    info(f"Target: {host}:{port}")
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # LAYER 1 — TCP socket reachability
+    # ──────────────────────────────────────────────────────────────────────────
+    section("LAYER 1 — TCP Socket (can we reach port 30010?)")
+    tcp_ok = False
+    try:
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(
+            None,
+            lambda: socket.create_connection((host, port), timeout=3).close()
+        )
+        ok(f"TCP connection to {host}:{port} succeeded")
+        tcp_ok = True
+    except Exception as e:
+        fail(f"TCP connection FAILED — {type(e).__name__}: {e}")
+        verdict = (
+            "LAYER 1 FAIL — Unreal Engine is not running, or Remote Control web server "
+            "is not started. In UE: Edit → Project Settings → Plugins → Remote Control API "
+            "→ ensure 'Enable Remote Control API' is checked, then restart UE."
+        )
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # LAYER 2 — HTTP server / GET /remote/info
+    # ──────────────────────────────────────────────────────────────────────────
+    section("LAYER 2 — HTTP Server (GET /remote/info)")
+    http_ok = False
+    info_body = ""
+    if tcp_ok:
+        try:
+            timeout = aiohttp.ClientTimeout(total=8, connect=4)
+            async with aiohttp.ClientSession(timeout=timeout) as s:
+                async with s.get(f"{base}/remote/info") as resp:
+                    info_body = await resp.text()
+                    raw("Status", str(resp.status))
+                    raw("Body",   info_body[:800])
+                    if resp.status == 200:
+                        ok("GET /remote/info → 200 OK — RC HTTP server is alive")
+                        http_ok = True
+                    else:
+                        fail(f"GET /remote/info returned HTTP {resp.status}")
+                        verdict = (
+                            f"LAYER 2 FAIL — RC server responded but returned HTTP {resp.status} "
+                            f"on /remote/info. Full body: {info_body}"
+                        )
+        except Exception as e:
+            fail(f"HTTP request failed — {type(e).__name__}: {e}")
+            verdict = (
+                f"LAYER 2 FAIL — TCP open but HTTP request threw {type(e).__name__}: {e}. "
+                "RC server may be starting up. Restart UE and try again."
+            )
+    else:
+        lines.append("  ⏭️   SKIPPED (Layer 1 failed)")
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # LAYER 3 — RC security settings (parsed from /remote/info or inferred)
+    # ──────────────────────────────────────────────────────────────────────────
+    section("LAYER 3 — Remote Control Security Settings")
+    if http_ok:
+        try:
+            parsed = _json.loads(info_body)
+            routes = [r.get("Path", "") for r in parsed.get("HttpRoutes", [])]
+            call_route_present = any("/remote/object/call" in r for r in routes)
+            if call_route_present:
+                ok("/remote/object/call route is registered in RC server")
+            else:
+                fail("/remote/object/call route NOT found in /remote/info routes")
+                info("Routes found: " + ", ".join(routes) if routes else "(none)")
+                verdict = (
+                    "LAYER 3 FAIL — RC server is running but /remote/object/call is not "
+                    "registered. The Remote Control API plugin may not be fully enabled. "
+                    "In UE: Edit → Plugins → search 'Remote Control API' → enable → restart."
+                )
+        except Exception:
+            info("Could not parse /remote/info JSON — skipping route check")
+    else:
+        lines.append("  ⏭️   SKIPPED (Layer 2 failed)")
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # LAYER 4 — PUT /remote/object/call (PythonScriptLibrary)
+    # ──────────────────────────────────────────────────────────────────────────
+    section("LAYER 4 — Python Execution (PythonScriptLibrary CDO)")
+    py_ok = False
+    py_body = ""
+    if http_ok:
+        payload = {
             "objectPath":   "/Script/PythonScriptPlugin.Default__PythonScriptLibrary",
             "functionName": "ExecutePythonScript",
             "parameters":   {"PythonScript": "print('UEOS_DIAG:ok')"}
-        }),
-        # 3. PUT /remote/object/call via EditorLevelLibrary — alternative path
-        ("PUT", "/remote/object/call", {
+        }
+        raw("Request payload", _json.dumps(payload))
+        try:
+            timeout = aiohttp.ClientTimeout(total=15, connect=4)
+            async with aiohttp.ClientSession(timeout=timeout) as s:
+                async with s.put(f"{base}/remote/object/call", json=payload) as resp:
+                    py_body = await resp.text()
+                    raw("Status", str(resp.status))
+                    raw("Body",   py_body)
+                    if resp.status == 200:
+                        if "UEOS_DIAG:ok" in py_body:
+                            ok("Python executed AND output returned — full round-trip works")
+                            py_ok = True
+                        else:
+                            ok(f"HTTP 200 received but output marker missing — partial success")
+                            info("This usually means Python ran but stdout capture isn't configured")
+                            info("Expected 'UEOS_DIAG:ok' in output field")
+                            py_ok = True  # 200 is good enough — execution works
+                            verdict = (
+                                "LAYER 4 PARTIAL — Python executes (HTTP 200) but output not "
+                                "captured. Check UE Output Log for 'UEOS_DIAG:ok' to confirm."
+                            )
+                    elif resp.status == 400:
+                        fail(f"HTTP 400 — RC rejected the Python call")
+                        raw("Full 400 body", py_body)
+                        # Decode known 400 reasons
+                        b = py_body.lower()
+                        if "restrict" in b or "security" in b or "access" in b:
+                            verdict = (
+                                "LAYER 4 FAIL (400 — Security block) — "
+                                "bRestrictServerAccess=True or bEnablePythonExecution=False "
+                                "in DefaultEngine.ini. Run UEOS.bat to auto-patch, then restart UE."
+                            )
+                        elif "pythonscript" in b or "not found" in b or "unknown" in b:
+                            verdict = (
+                                "LAYER 4 FAIL (400 — Object not found) — "
+                                "Python Script Plugin is not enabled or the CDO path is wrong. "
+                                "In UE: Edit → Plugins → 'Python Editor Script Plugin' → enable → restart."
+                            )
+                        elif "function" in b:
+                            verdict = (
+                                "LAYER 4 FAIL (400 — Function not found) — "
+                                "ExecutePythonScript function not found on the Python CDO. "
+                                f"Full UE response: {py_body}"
+                            )
+                        else:
+                            verdict = (
+                                f"LAYER 4 FAIL (400) — UE rejected the call. "
+                                f"Full UE response: {py_body}"
+                            )
+                    elif resp.status == 403:
+                        fail(f"HTTP 403 Forbidden")
+                        verdict = (
+                            "LAYER 4 FAIL (403) — RC server is blocking the request. "
+                            "Set bRestrictServerAccess=False in DefaultEngine.ini → "
+                            "[/Script/RemoteControl.RemoteControlSettings] section. "
+                            "Run UEOS.bat to auto-patch, then restart UE."
+                        )
+                    else:
+                        fail(f"HTTP {resp.status}")
+                        verdict = f"LAYER 4 FAIL (HTTP {resp.status}) — Full body: {py_body}"
+        except Exception as e:
+            fail(f"Request threw {type(e).__name__}: {e}")
+            verdict = f"LAYER 4 FAIL — Exception: {type(e).__name__}: {e}"
+    else:
+        lines.append("  ⏭️   SKIPPED (Layer 2 failed)")
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # LAYER 5 — PUT /remote/object/call (EditorLevelLibrary — no Python needed)
+    # ──────────────────────────────────────────────────────────────────────────
+    section("LAYER 5 — Non-Python RC Call (EditorLevelLibrary)")
+    if http_ok and not py_ok:
+        # Only run this if Python failed — helps isolate whether it's Python-specific
+        payload2 = {
             "objectPath":   "/Script/EditorScriptingUtilities.Default__EditorLevelLibrary",
             "functionName": "GetAllLevelActors",
             "parameters":   {}
-        }),
-    ]
+        }
+        try:
+            timeout = aiohttp.ClientTimeout(total=10, connect=4)
+            async with aiohttp.ClientSession(timeout=timeout) as s:
+                async with s.put(f"{base}/remote/object/call", json=payload2) as resp:
+                    body2 = await resp.text()
+                    raw("Status", str(resp.status))
+                    raw("Body",   body2[:400])
+                    if resp.status == 200:
+                        ok("EditorLevelLibrary call succeeded — RC object/call works, issue is Python-specific")
+                        info("Python Script Plugin is likely disabled or CDO path is wrong")
+                    else:
+                        fail(f"HTTP {resp.status} — Even non-Python RC calls fail")
+                        info("This confirms a global RC security block, not a Python-specific issue")
+        except Exception as e:
+            fail(f"Request threw {type(e).__name__}: {e}")
+    elif py_ok:
+        ok("SKIPPED — Python layer already passed, no need to test")
+    else:
+        lines.append("  ⏭️   SKIPPED (Layer 2 failed)")
 
-    labels = [
-        "GET /remote/info",
-        "PUT /remote/object/call (PythonScriptLibrary)",
-        "PUT /remote/object/call (EditorLevelLibrary)",
-    ]
+    # ──────────────────────────────────────────────────────────────────────────
+    # LAYER 6 — DefaultEngine.ini on disk
+    # ──────────────────────────────────────────────────────────────────────────
+    section("LAYER 6 — DefaultEngine.ini (on-disk settings verification)")
+    try:
+        from pathlib import Path
 
-    timeout = aiohttp.ClientTimeout(total=10, connect=5)
-    async with aiohttp.ClientSession(timeout=timeout) as session:
-        for (method, endpoint, payload), label in zip(tests, labels):
-            url = f"{base}{endpoint}"
+        home = Path.home()
+        docs = home / "Documents"
+        search_roots = [
+            docs / "Unreal Projects",
+            home / "OneDrive" / "Documents" / "Unreal Projects",
+            home / "Desktop",
+            docs,
+        ]
+        for drive in ["C:\\", "D:\\", "E:\\"]:
+            for sub in ["Unreal Projects", "UE5", "Games", "Projects", "Dev"]:
+                c = Path(drive) / sub
+                if c.exists():
+                    search_roots.append(c)
+
+        ini_files: list[Path] = []
+        seen: set[str] = set()
+
+        def _scan(root: Path, depth: int):
             try:
-                kwargs = {"json": payload} if payload else {}
-                meth = getattr(session, method.lower())
-                async with meth(url, **kwargs) as resp:
-                    body = await resp.text()
-                    results.append(
-                        f"[{label}]\n"
-                        f"  Status : {resp.status}\n"
-                        f"  Headers: {dict(resp.headers)}\n"
-                        f"  Body   : {body}\n"
-                    )
-            except Exception as e:
-                results.append(
-                    f"[{label}]\n"
-                    f"  EXCEPTION: {type(e).__name__}: {e}\n"
-                )
+                with os.scandir(root) as it:
+                    for entry in it:
+                        try:
+                            if entry.is_file() and entry.name.endswith(".uproject"):
+                                ini = Path(entry.path).parent / "Config" / "DefaultEngine.ini"
+                                k = str(ini).lower()
+                                if k not in seen:
+                                    seen.add(k)
+                                    ini_files.append(ini)
+                            elif entry.is_dir() and depth > 0:
+                                skip = {"$recycle.bin", "windows", "program files",
+                                        "program files (x86)", "programdata",
+                                        "node_modules", ".git", "__pycache__", "appdata"}
+                                if entry.name.lower() not in skip:
+                                    _scan(Path(entry.path), depth - 1)
+                        except (PermissionError, OSError):
+                            continue
+            except (PermissionError, OSError):
+                pass
 
-    output = "═══ UEOS RAW DIAGNOSTIC ═══\n\n" + "\n".join(results)
-    return [types.TextContent(type="text", text=output)]
+        for root in search_roots:
+            if root.exists():
+                _scan(root, 4)
+
+        if not ini_files:
+            fail("No .uproject files found — cannot check DefaultEngine.ini")
+            info("Make sure your project is in Documents/Unreal Projects or C:/Unreal Projects")
+        else:
+            for ini_path in ini_files:
+                project_name = ini_path.parent.parent.name
+                info(f"Project: {project_name}  →  {ini_path}")
+                if not ini_path.exists():
+                    fail(f"DefaultEngine.ini does not exist at {ini_path}")
+                    continue
+
+                content = ini_path.read_text(encoding="utf-8", errors="replace")
+
+                # Check each required key
+                checks = [
+                    ("/Script/RemoteControl.RemoteControlSettings", "bRestrictServerAccess",  "False"),
+                    ("/Script/RemoteControl.RemoteControlSettings", "bEnablePythonExecution", "True"),
+                    ("/Script/PythonScriptPlugin.PythonScriptPluginSettings", "bRemoteExecution", "True"),
+                ]
+                all_ini_ok = True
+                for section_name, key, expected in checks:
+                    # Find the section
+                    in_section = False
+                    found_key = False
+                    actual_val = None
+                    for line in content.splitlines():
+                        stripped = line.strip()
+                        if stripped == f"[{section_name}]":
+                            in_section = True
+                            continue
+                        if in_section:
+                            if stripped.startswith("["):
+                                in_section = False
+                                continue
+                            if stripped.startswith(f"{key}="):
+                                actual_val = stripped.split("=", 1)[1].strip()
+                                found_key = True
+                                break
+
+                    if not found_key:
+                        fail(f"MISSING: [{section_name}] {key}={expected}")
+                        all_ini_ok = False
+                    elif actual_val.lower() != expected.lower():
+                        fail(f"WRONG VALUE: [{section_name}] {key}={actual_val}  (expected {expected})")
+                        all_ini_ok = False
+                    else:
+                        ok(f"[{section_name}] {key}={actual_val}")
+
+                if all_ini_ok:
+                    ok(f"{project_name} — all required INI keys present and correct")
+                else:
+                    fail(f"{project_name} — INI missing/wrong keys above. Run UEOS.bat to auto-patch, then restart UE.")
+                    if verdict == "UNKNOWN":
+                        verdict = (
+                            f"LAYER 6 FAIL — DefaultEngine.ini for '{project_name}' is missing or has "
+                            "wrong values for Remote Control / Python settings. Run UEOS.bat, then "
+                            "restart UE with the project open."
+                        )
+
+    except Exception as e:
+        fail(f"INI check threw {type(e).__name__}: {e}")
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # FINAL VERDICT
+    # ──────────────────────────────────────────────────────────────────────────
+    lines.append("")
+    lines.append("╔══════════════════════════════════════════════════════╗")
+    lines.append("║                  VERDICT                             ║")
+    lines.append("╚══════════════════════════════════════════════════════╝")
+
+    if py_ok and verdict == "UNKNOWN":
+        verdict = (
+            "ALL LAYERS PASS — UEOS can reach UE, RC is responding, Python executes "
+            "and returns output. If tools still fail, restart Claude Desktop to reload "
+            "the MCP server."
+        )
+        lines.append(f"  ✅  {verdict}")
+    else:
+        lines.append(f"  ❌  {verdict}")
+
+    return [types.TextContent(type="text", text="\n".join(lines))]
 
 
 async def handle_status() -> list[types.TextContent]:
