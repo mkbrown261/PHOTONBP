@@ -32,20 +32,51 @@ MCP_CWD    = ROOT / "mcp_server"
 # IS the right python — so we use it, since it will be a Windows path.
 PYTHON_CMD = sys.executable
 
-CLAUDE_CONFIGS = [
-    Path(os.environ.get("APPDATA", "")) / "Claude" / "claude_desktop_config.json",   # Windows
-    Path.home() / "Library" / "Application Support" / "Claude" / "claude_desktop_config.json",  # macOS
-    Path.home() / ".config" / "Claude" / "claude_desktop_config.json",               # Linux
-]
+def _get_claude_configs() -> list[Path]:
+    """
+    Return all possible claude_desktop_config.json locations.
+    Includes Microsoft Store version (LocalCache path) and direct install (Roaming path).
+    """
+    configs = []
+
+    # Windows — direct install (Roaming)
+    appdata = os.environ.get("APPDATA", "")
+    if appdata:
+        configs.append(Path(appdata) / "Claude" / "claude_desktop_config.json")
+
+    # Windows — Microsoft Store install (LocalCache inside Packages)
+    localappdata = os.environ.get("LOCALAPPDATA", "")
+    if localappdata:
+        packages_dir = Path(localappdata) / "Packages"
+        if packages_dir.exists():
+            try:
+                for entry in packages_dir.iterdir():
+                    if entry.is_dir() and entry.name.lower().startswith("claude_"):
+                        configs.append(
+                            entry / "LocalCache" / "Roaming" / "Claude" / "claude_desktop_config.json"
+                        )
+            except (PermissionError, OSError):
+                pass
+
+    # macOS
+    configs.append(
+        Path.home() / "Library" / "Application Support" / "Claude" / "claude_desktop_config.json"
+    )
+
+    # Linux
+    configs.append(Path.home() / ".config" / "Claude" / "claude_desktop_config.json")
+
+    return configs
 
 
 def find_claude_config() -> Path | None:
+    configs = _get_claude_configs()
     # First: find an existing file
-    for p in CLAUDE_CONFIGS:
+    for p in configs:
         if p.exists():
             return p
     # Second: find a directory that exists (Claude installed but config not yet created)
-    for p in CLAUDE_CONFIGS:
+    for p in configs:
         if p.parent.exists():
             return p
     return None
