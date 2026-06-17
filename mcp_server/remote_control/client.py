@@ -184,18 +184,47 @@ class UnrealRemoteControl:
         """
         Execute a Python script inside UE via the Remote Execution protocol.
 
-        Uses UDP multicast discovery + TCP command socket — not the HTTP CDO
-        approach, which is blocked by UE's security model.
+        Uses ExecuteFile mode (via exec(open(tmp).read())) when the script
+        contains imports or multiple statements — this avoids a UE Remote
+        Execution quirk where multi-line scripts with imports swallow output
+        in ExecuteStatement mode.
 
         Returns a dict compatible with the old HTTP response format:
           { "output": "<all stdout lines joined>", "success": bool }
         """
+        import tempfile, os as _os
         self._re.command_timeout = timeout
         loop = asyncio.get_event_loop()
-        raw = await loop.run_in_executor(
-            None,
-            lambda: self._re.run(script, exec_mode=EXEC_MODE_EXEC_STATEMENT)
-        )
+
+        # Detect multi-line or import-containing scripts
+        needs_file = "\n" in script.strip() or script.strip().startswith("import ") or script.strip().startswith("from ")
+
+        if needs_file:
+            # Write to temp file, execute via single exec() statement
+            tmp = tempfile.NamedTemporaryFile(
+                mode="w", suffix=".py", delete=False,
+                prefix="ueos_exec_", encoding="utf-8"
+            )
+            tmp.write(script)
+            tmp.flush()
+            tmp.close()
+            tmp_path = tmp.name.replace("\\", "/")
+            run_script = f'exec(open(r"{tmp_path}", encoding="utf-8").read())'
+        else:
+            tmp_path = None
+            run_script = script
+
+        try:
+            raw = await loop.run_in_executor(
+                None,
+                lambda: self._re.run(run_script, exec_mode=EXEC_MODE_EXEC_STATEMENT)
+            )
+        finally:
+            if tmp_path:
+                try:
+                    _os.unlink(tmp_path)
+                except Exception:
+                    pass
 
         # Normalise to legacy format so all callers keep working unchanged
         output_entries = raw.get("output", [])

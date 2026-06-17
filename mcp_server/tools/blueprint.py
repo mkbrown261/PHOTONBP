@@ -464,61 +464,79 @@ Use for: door opening, elevator movement, light flickering, platform movement, c
 
         ue_class = class_map.get(parent_class, parent_class)
 
-        script = f"""
-import unreal
-import json
+        # Write script to a temp file and use ExecuteFile mode.
+        # This bypasses the Remote Execution quirk where multi-line scripts
+        # with imports at the top swallow output in ExecuteStatement mode.
+        import tempfile, os, textwrap
+        script_body = textwrap.dedent(f"""
+            import unreal, json
+            unreal.EditorAssetLibrary.make_directory("{path}")
+            asset_tools = unreal.AssetToolsHelpers.get_asset_tools()
+            parent_class = unreal.load_class(None, "{ue_class}")
+            if parent_class is None:
+                parent_obj = unreal.EditorAssetLibrary.load_asset("{ue_class}")
+                if parent_obj:
+                    parent_class = parent_obj.generated_class()
+            if parent_class is None:
+                print("UEOS_ERROR:Could not resolve parent class: {ue_class}")
+            else:
+                asset_path = "{path}/{name}"
+                if unreal.EditorAssetLibrary.does_asset_exist(asset_path):
+                    print("UEOS_RESULT:" + json.dumps({{"status": "exists", "path": asset_path, "message": "Blueprint already exists"}}))
+                else:
+                    bp_factory = unreal.BlueprintFactory()
+                    bp_factory.parent_class = parent_class
+                    new_bp = asset_tools.create_asset("{name}", "{path}", None, bp_factory)
+                    if new_bp:
+                        unreal.EditorAssetLibrary.save_asset(asset_path)
+                        unreal.BlueprintEditorLibrary.compile_blueprint(new_bp)
+                        print("UEOS_RESULT:" + json.dumps({{
+                            "status": "created",
+                            "path": asset_path,
+                            "class": str(new_bp.get_class().get_name()),
+                            "parent": "{ue_class}",
+                            "message": "Blueprint created and compiled successfully"
+                        }}))
+                    else:
+                        print("UEOS_ERROR:asset_tools.create_asset returned None for {path}/{name} — check UE output log")
+        """).strip()
 
-# Ensure path exists
-unreal.EditorAssetLibrary.make_directory("{path}")
+        # Write to a temp file UE can read
+        tmp = tempfile.NamedTemporaryFile(
+            mode="w", suffix=".py", delete=False,
+            prefix="ueos_bp_create_", encoding="utf-8"
+        )
+        tmp.write(script_body)
+        tmp.flush()
+        tmp.close()
+        tmp_path = tmp.name.replace("\\", "/")
 
-asset_tools = unreal.AssetToolsHelpers.get_asset_tools()
+        # Use exec(open(...).read()) — single statement, no import issues
+        script = f'exec(open(r"{tmp_path}", encoding="utf-8").read())'
 
-# Resolve parent class
-parent_class = unreal.load_class(None, "{ue_class}")
-if parent_class is None:
-    # Try loading as asset (custom BP parent)
-    parent_obj = unreal.EditorAssetLibrary.load_asset("{ue_class}")
-    if parent_obj:
-        parent_class = unreal.EditorAssetLibrary.load_asset("{ue_class}").generated_class()
+        try:
+            result = await self.ue.execute_python(script)
+        finally:
+            try:
+                os.unlink(tmp_path)
+            except Exception:
+                pass
 
-if parent_class is None:
-    print("UEOS_ERROR:Could not resolve parent class: {ue_class}")
-else:
-    bp_factory = unreal.BlueprintFactory()
-    bp_factory.parent_class = parent_class
-
-    asset_path = "{path}/{name}"
-    existing = unreal.EditorAssetLibrary.does_asset_exist(asset_path)
-
-    if existing:
-        print("UEOS_RESULT:" + json.dumps({{"status": "exists", "path": asset_path, "message": "Blueprint already exists"}}))
-    else:
-        new_bp = asset_tools.create_asset("{name}", "{path}", None, bp_factory)
-        if new_bp:
-            unreal.EditorAssetLibrary.save_asset(asset_path)
-            print("UEOS_RESULT:" + json.dumps({{
-                "status": "created",
-                "path": asset_path,
-                "class": str(new_bp.get_class().get_name()),
-                "parent": "{ue_class}",
-                "message": "Blueprint created successfully"
-            }}))
-        else:
-            print("UEOS_ERROR:Failed to create Blueprint at {path}/{name}")
-"""
-
-        result = await self.ue.execute_python(script)
         output = result.get("output", "")
 
         for line in output.split("\n"):
+            line = line.strip()
             if line.startswith("UEOS_RESULT:"):
-                data = json.loads(line.replace("UEOS_RESULT:", ""))
+                data = json.loads(line[len("UEOS_RESULT:"):])
                 return [types.TextContent(type="text", text=json.dumps(data, indent=2))]
             if line.startswith("UEOS_ERROR:"):
-                error = line.replace("UEOS_ERROR:", "")
+                error = line[len("UEOS_ERROR:"):]
                 return [types.TextContent(type="text", text=json.dumps({"status": "error", "message": error}, indent=2))]
 
-        return [types.TextContent(type="text", text=json.dumps({"status": "error", "message": f"No output received. Raw: {output}"}, indent=2))]
+        return [types.TextContent(type="text", text=json.dumps({
+            "status": "error",
+            "message": f"No output received. Raw: {output[:500]}"
+        }, indent=2))]
 
     async def _add_variable(self, args: dict) -> list[types.TextContent]:
         bp_path = args["blueprint_path"]
