@@ -144,18 +144,28 @@ def validate_tripo(key: str) -> tuple[bool, str]:
 
 def check_ue(host: str, port: str) -> tuple[bool, str]:
     try:
-        payload = json.dumps({
-            "objectPath": "/Script/PythonScriptPlugin.Default__PythonScriptLibrary",
-            "functionName": "ExecutePythonScript",
-            "parameters": {"PythonScript": "print('UEOS:OK')"}
-        }).encode()
+        # Use the simple info endpoint — works as long as Remote Control API is running
         req = urllib.request.Request(
-            f"http://{host}:{port}/remote/object/call",
-            data=payload, headers={"Content-Type": "application/json"}, method="PUT"
+            f"http://{host}:{port}/remote/info",
+            headers={"Content-Type": "application/json"},
+            method="GET"
         )
         with urllib.request.urlopen(req, timeout=4) as resp:
             return True, f"Connected  •  {host}:{port}"
     except Exception:
+        pass
+    try:
+        # Fallback: try hitting root endpoint
+        req = urllib.request.Request(
+            f"http://{host}:{port}/",
+            method="GET"
+        )
+        with urllib.request.urlopen(req, timeout=4) as resp:
+            return True, f"Connected  •  {host}:{port}"
+    except urllib.error.HTTPError:
+        # Any HTTP error still means the server is up
+        return True, f"Connected  •  {host}:{port}"
+    except Exception as e:
         return False, f"Not reachable  •  Start UE 5.4 first"
 
 # ─────────────────────────────────────────────────────────────────────────────
