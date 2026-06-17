@@ -1,353 +1,356 @@
 """
-remote_execution.py — UEOS Remote Execution Client
+remote_execution.py — UE Python Remote Execution client
 
-Implements Unreal Engine's Python Remote Execution protocol (multicast UDP
-discovery + TCP command socket). This is the CORRECT way to run arbitrary
-Python inside the UE editor — not the HTTP CDO approach which is blocked
-by UE's security model regardless of INI settings.
+Protocol facts (from upyrc source — the authoritative reference):
 
-Requirements (UE side):
-  - Python Editor Script Plugin enabled
-  - Project Settings → Plugins → Python → Enable Remote Execution ✅
-  - Multicast Bind Address: 0.0.0.0
-  - Multicast Group Endpoint: 239.0.0.1:6766 (default)
+UDP multicast socket:
+  - Plain JSON, NO length prefix
+  - IP_MULTICAST_LOOP = 1 (required)
+  - membership_request = inet_aton(GROUP_IP) + inet_aton(BIND_ADDRESS)  ← NOT INADDR_ANY
+  - bind to (BIND_ADDRESS, GROUP_PORT)
 
-Protocol reference: Engine/Plugins/Experimental/PythonScriptPlugin/Content/Python/remote_execution.py
+TCP command socket:
+  - CLIENT binds + listens, UE connects BACK to the client
+  - open_connection message tells UE which (ip, port) to connect to
+  - Plain JSON, NO length prefix
+  - recvfrom in a loop, accumulate bytes, try json.loads each time
+
+Sequence:
+  1. Create multicast UDP socket
+  2. Send ping  →  receive pong (contains unreal_node_id)
+  3. Bind TCP socket on a random free port, call listen()
+  4. Send open_connection via UDP (telling UE the TCP port)
+  5. Call accept() — UE connects to us
+  6. Send command JSON over the TCP connection
+  7. Receive command_result JSON from the TCP connection
+  8. Send close_connection via UDP
+  9. Close everything
 """
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import socket
-import struct
 import time
 import uuid
 from typing import Any
 
 log = logging.getLogger("ueos.remote_exec")
 
-# ── Protocol constants (must match UE's Python plugin) ────────────────────────
-DEFAULT_MULTICAST_TTL         = 0          # 0 = local machine only
-DEFAULT_MULTICAST_GROUP_IP    = "239.0.0.1"
-DEFAULT_MULTICAST_GROUP_PORT  = 6766
-DEFAULT_MULTICAST_BIND_IP     = "0.0.0.0"
-DEFAULT_COMMAND_PORT          = 6776       # TCP port UE listens on for commands
+# ── Protocol constants ─────────────────────────────────────────────────────────
+MULTICAST_GROUP_IP   = "239.0.0.1"
+MULTICAST_GROUP_PORT = 6766
+MULTICAST_BIND_ADDR  = "127.0.0.1"   # upyrc default; UE default is 0.0.0.0
+IP_MULTICAST_TTL     = 0             # 0 = local machine only
+SOCKET_TIMEOUT       = 0.5           # seconds (matches upyrc)
+BUFFER_SIZE          = 2_097_152     # 2 MB (matches upyrc)
 
-# Message types
-_TYPE_PING       = "ping"
-_TYPE_PONG       = "pong"
-_TYPE_OPEN_CMD   = "open_connection"
-_TYPE_CLOSE_CMD  = "close_connection"
-_TYPE_CMD        = "command"
-_TYPE_CMD_RESULT = "command_result"
+PROTOCOL_VERSION = 1
+UE_MAGIC         = "ue_py"
 
-# Exec modes
-EXEC_MODE_EXEC_FILE        = "ExecuteFile"
-EXEC_MODE_EXEC_STATEMENT   = "ExecuteStatement"
-EXEC_MODE_EVALUATE_EXPR    = "EvaluateExpression"
+# Exec modes (string values UE expects)
+EXEC_MODE_EXEC_FILE      = "ExecuteFile"
+EXEC_MODE_EXEC_STATEMENT = "ExecuteStatement"
+EXEC_MODE_EVAL_STATEMENT = "EvaluateStatement"
 
 
-# ── Message helpers ────────────────────────────────────────────────────────────
+# ── Low-level helpers ─────────────────────────────────────────────────────────
 
-def _make_message(msg_type: str, source_id: str, dest_id: str | None = None, data: dict | None = None) -> bytes:
-    msg = {
-        "version":   1,
-        "magic":     "ue_py",
-        "type":      msg_type,
-        "source":    source_id,
-        "dest":      dest_id or "",
-        "data":      data or {},
+def _get_free_port() -> tuple[str, int]:
+    """Bind to port 0 to get a free ephemeral port, then release it."""
+    with socket.socket() as s:
+        s.bind(("", 0))
+        _, port = s.getsockname()
+    return ("127.0.0.1", port)
+
+
+def _make_udp_msg(msg_type: str, source: str, dest: str = "", data: dict | None = None) -> bytes:
+    """Encode a protocol message as plain JSON bytes (no length prefix)."""
+    msg: dict[str, Any] = {
+        "version": PROTOCOL_VERSION,
+        "magic":   UE_MAGIC,
+        "type":    msg_type,
+        "source":  source,
     }
-    payload = json.dumps(msg).encode("utf-8")
-    # 4-byte little-endian length prefix
-    return struct.pack("<I", len(payload)) + payload
+    if dest:
+        msg["dest"] = dest
+    if data is not None:
+        msg["data"] = data
+    return json.dumps(msg).encode("utf-8")
 
 
-def _parse_message(data: bytes) -> dict | None:
-    try:
-        if len(data) < 4:
-            return None
-        length = struct.unpack("<I", data[:4])[0]
-        payload = data[4:4 + length]
-        return json.loads(payload.decode("utf-8"))
-    except Exception:
-        return None
-
-
-# ── UDP discovery ──────────────────────────────────────────────────────────────
-
-class _UDPDiscovery:
+def _open_multicast_socket(bind_addr: str, group_ip: str, group_port: int, ttl: int) -> socket.socket:
     """
-    Sends UDP multicast pings and collects pong replies from UE instances.
+    Create and configure the UDP multicast socket exactly as upyrc does.
+    Critical differences from the wrong implementation:
+      - IP_MULTICAST_LOOP = 1
+      - membership_request uses bind_addr, NOT INADDR_ANY
     """
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    s.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, ttl)
+    s.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_LOOP, 1)   # ← REQUIRED
+    s.bind((bind_addr, group_port))
+    membership_request = (
+        socket.inet_aton(group_ip) +
+        socket.inet_aton(bind_addr)   # ← NOT INADDR_ANY
+    )
+    s.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, membership_request)
+    s.settimeout(SOCKET_TIMEOUT)
+    return s
 
-    def __init__(
-        self,
-        multicast_group:  str = DEFAULT_MULTICAST_GROUP_IP,
-        multicast_port:   int = DEFAULT_MULTICAST_GROUP_PORT,
-        bind_ip:          str = DEFAULT_MULTICAST_BIND_IP,
-        ttl:              int = DEFAULT_MULTICAST_TTL,
-    ):
-        self.multicast_group = multicast_group
-        self.multicast_port  = multicast_port
-        self.bind_ip         = bind_ip
-        self.ttl             = ttl
-        self.source_id       = str(uuid.uuid4())
-        self._sock: socket.socket | None = None
 
-    def open(self):
-        self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
-        self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+def _recv_json(s: socket.socket, our_msg_type: str) -> dict | None:
+    """
+    Receive UDP datagrams until we get a valid JSON response that isn't
+    an echo of our own message type.  Returns None on timeout.
+    """
+    data_acc = b""
+    while True:
         try:
-            self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
-        except AttributeError:
-            pass  # Windows doesn't have SO_REUSEPORT
-        self._sock.bind((self.bind_ip, self.multicast_port))
-        # Join multicast group
-        mreq = struct.pack("4sL",
-            socket.inet_aton(self.multicast_group),
-            socket.INADDR_ANY
-        )
-        self._sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
-        # Set TTL
-        self._sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, self.ttl)
-        self._sock.settimeout(0.5)
-
-    def close(self):
-        if self._sock:
+            data, _ = s.recvfrom(BUFFER_SIZE)
+            data_acc += data
             try:
-                self._sock.close()
-            except Exception:
-                pass
-            self._sock = None
-
-    def ping(self):
-        """Broadcast a ping to discover UE nodes."""
-        msg = _make_message(_TYPE_PING, self.source_id)
-        self._sock.sendto(msg, (self.multicast_group, self.multicast_port))
-
-    def collect_pongs(self, timeout: float = 1.0) -> list[dict]:
-        """Collect pong replies for up to `timeout` seconds."""
-        nodes = []
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            try:
-                data, addr = self._sock.recvfrom(4096)
-                msg = _parse_message(data)
-                if msg and msg.get("type") == _TYPE_PONG:
-                    node = msg.get("data", {})
-                    node["_addr"] = addr[0]
-                    nodes.append(node)
-            except socket.timeout:
-                break
-            except Exception:
+                msg = json.loads(data_acc)
+                data_acc = b""
+            except json.JSONDecodeError:
                 continue
-        return nodes
+            if msg.get("type") == our_msg_type:
+                continue          # skip echo of our own message
+            return msg
+        except socket.timeout:
+            return None
 
 
-# ── TCP command connection ────────────────────────────────────────────────────
-
-class _TCPCommandConnection:
+def _recv_tcp_json(conn: socket.socket, our_msg_type: str, timeout: float) -> dict | None:
     """
-    Opens a TCP connection to a discovered UE node and sends Python commands.
+    Read from a TCP connection accumulating bytes until valid JSON arrives.
+    Ignores echoes of our own message type.  Returns None on timeout.
     """
-
-    def __init__(self, node: dict, source_id: str, timeout: int = 30):
-        self._node      = node
-        self._source_id = source_id
-        self._timeout   = timeout
-        self._reader: asyncio.StreamReader | None  = None
-        self._writer: asyncio.StreamWriter | None = None
-        self._node_id   = node.get("node_id", "")
-        self._command_ip   = node.get("_addr", "127.0.0.1")
-        self._command_port = node.get("command_port", DEFAULT_COMMAND_PORT)
-
-    async def open(self):
-        self._reader, self._writer = await asyncio.wait_for(
-            asyncio.open_connection(self._command_ip, self._command_port),
-            timeout=5
-        )
-        # Send open_connection handshake
-        msg = _make_message(_TYPE_OPEN_CMD, self._source_id, self._node_id)
-        self._writer.write(msg)
-        await self._writer.drain()
-
-    async def close(self):
-        if self._writer:
+    conn.settimeout(timeout)
+    data_acc = b""
+    while True:
+        try:
+            chunk, _ = conn.recvfrom(BUFFER_SIZE)
+            if not chunk:
+                return None
+            data_acc += chunk
             try:
-                msg = _make_message(_TYPE_CLOSE_CMD, self._source_id, self._node_id)
-                self._writer.write(msg)
-                await self._writer.drain()
-                self._writer.close()
-            except Exception:
-                pass
-
-    async def run_command(
-        self,
-        command:    str,
-        exec_mode:  str = EXEC_MODE_EXEC_STATEMENT,
-        unattended: bool = True,
-    ) -> dict:
-        """
-        Send a Python command and wait for the result.
-        Returns dict with keys: success, result, output (list of {type, output}).
-        """
-        cmd_id = str(uuid.uuid4())
-        msg = _make_message(
-            _TYPE_CMD,
-            self._source_id,
-            self._node_id,
-            data={
-                "command":    command,
-                "exec_mode":  exec_mode,
-                "unattended": unattended,
-                "command_id": cmd_id,
-            }
-        )
-        self._writer.write(msg)
-        await self._writer.drain()
-
-        # Read response
-        deadline = time.monotonic() + self._timeout
-        while time.monotonic() < deadline:
-            try:
-                header = await asyncio.wait_for(
-                    self._reader.readexactly(4),
-                    timeout=min(2.0, deadline - time.monotonic())
-                )
-                length = struct.unpack("<I", header)[0]
-                payload = await asyncio.wait_for(
-                    self._reader.readexactly(length),
-                    timeout=min(self._timeout, deadline - time.monotonic())
-                )
-                msg = json.loads(payload.decode("utf-8"))
-                if msg.get("type") == _TYPE_CMD_RESULT:
-                    data = msg.get("data", {})
-                    if data.get("command_id") == cmd_id:
-                        return data
-            except asyncio.TimeoutError:
+                msg = json.loads(data_acc)
+                data_acc = b""
+            except json.JSONDecodeError:
                 continue
-            except Exception as e:
-                raise RuntimeError(f"TCP read error: {e}")
-
-        raise TimeoutError(f"No response from UE within {self._timeout}s")
+            if msg.get("type") == our_msg_type:
+                continue          # skip echo
+            return msg
+        except socket.timeout:
+            return None
 
 
 # ── High-level client ─────────────────────────────────────────────────────────
 
 class UnrealRemoteExecution:
     """
-    High-level async client for UE Python Remote Execution.
+    Synchronous UE Python Remote Execution client.
 
-    Usage:
-        exec = UnrealRemoteExecution()
-        result = await exec.run("print('hello')")
-        # result = {"success": True, "output": [...], "result": ""}
+    Correct protocol flow (matching upyrc exactly):
+      ping → pong → bind TCP → listen → open_connection (UDP) →
+      accept() → command (TCP) → command_result (TCP) → close_connection (UDP)
     """
 
     def __init__(
         self,
-        multicast_group: str = DEFAULT_MULTICAST_GROUP_IP,
-        multicast_port:  int = DEFAULT_MULTICAST_GROUP_PORT,
-        bind_ip:         str = DEFAULT_MULTICAST_BIND_IP,
-        command_timeout: int = 30,
-        discovery_timeout: float = 3.0,
+        multicast_group_ip:   str   = MULTICAST_GROUP_IP,
+        multicast_group_port: int   = MULTICAST_GROUP_PORT,
+        multicast_bind_addr:  str   = MULTICAST_BIND_ADDR,
+        ip_multicast_ttl:     int   = IP_MULTICAST_TTL,
+        command_timeout:      int   = 30,
+        discovery_timeout:    float = 3.0,
     ):
-        self.multicast_group    = multicast_group
-        self.multicast_port     = multicast_port
-        self.bind_ip            = bind_ip
-        self.command_timeout    = command_timeout
-        self.discovery_timeout  = discovery_timeout
-        self._source_id         = str(uuid.uuid4())
+        self.group_ip        = multicast_group_ip
+        self.group_port      = multicast_group_port
+        self.bind_addr       = multicast_bind_addr
+        self.ttl             = ip_multicast_ttl
+        self.command_timeout = command_timeout
+        self.disc_timeout    = discovery_timeout
+        self.source_id       = str(uuid.uuid4())
 
-    async def _discover_node(self) -> dict:
-        """Find a UE instance via multicast. Returns node dict or raises."""
-        loop = asyncio.get_event_loop()
-        discovery = _UDPDiscovery(
-            multicast_group=self.multicast_group,
-            multicast_port=self.multicast_port,
-            bind_ip=self.bind_ip,
-        )
+    # ── Public API ─────────────────────────────────────────────────────────
 
-        def _sync_discover():
-            discovery.open()
-            try:
-                deadline = time.monotonic() + self.discovery_timeout
-                while time.monotonic() < deadline:
-                    discovery.ping()
-                    nodes = discovery.collect_pongs(timeout=0.5)
-                    if nodes:
-                        return nodes[0]
-                return None
-            finally:
-                discovery.close()
-
-        node = await loop.run_in_executor(None, _sync_discover)
-        if not node:
-            raise RuntimeError(
-                "No Unreal Engine instance found via Remote Execution multicast. "
-                "Ensure: Python Editor Script Plugin enabled, "
-                "Project Settings → Plugins → Python → Enable Remote Execution ✅, "
-                "Multicast Bind Address = 0.0.0.0"
-            )
-        return node
-
-    async def run(
-        self,
-        script: str,
-        exec_mode: str = EXEC_MODE_EXEC_STATEMENT,
-        timeout: int | None = None,
-    ) -> dict:
-        """
-        Discover a UE node, connect, run script, disconnect.
-        Returns: { "success": bool, "output": [...], "result": str }
-        """
-        node = await self._discover_node()
-        conn = _TCPCommandConnection(
-            node,
-            self._source_id,
-            timeout=timeout or self.command_timeout
-        )
-        await conn.open()
+    def ping(self) -> bool:
+        """Return True if a UE instance responds to multicast ping."""
         try:
-            result = await conn.run_command(script, exec_mode=exec_mode)
-            return result
-        finally:
-            await conn.close()
-
-    async def ping(self) -> bool:
-        """Return True if a UE instance is reachable via Remote Execution."""
-        try:
-            await self._discover_node()
-            return True
+            node_id = self._discover()
+            return node_id is not None
         except Exception:
             return False
 
-    async def run_ex(self, script: str, timeout: int | None = None) -> dict:
+    def run(
+        self,
+        script:    str,
+        exec_mode: str = EXEC_MODE_EXEC_STATEMENT,
+        timeout:   int | None = None,
+    ) -> dict:
         """
-        Like run() but wraps script in try/except and parses UEOS_RESULT / UEOS_ERROR markers.
-        Returns: { "ok": bool, "result": Any, "error": str | None, "raw_output": str }
+        Execute a Python script inside UE.
+        Returns the raw command_result data dict from UE.
+        Raises RuntimeError / TimeoutError on failure.
+        """
+        t = timeout if timeout is not None else self.command_timeout
+        return self._execute(script, exec_mode=exec_mode, timeout=t)
+
+    def run_ex(self, script: str, timeout: int | None = None) -> dict:
+        """
+        Like run() but wraps script in try/except and parses UEOS markers.
+        Returns: { "ok": bool, "result": Any, "error": str|None, "raw_output": str }
         """
         wrapped = (
-            "import json as _j, traceback as _tb\n"
-            "try:\n"
-            + "\n".join("    " + line for line in script.splitlines())
-            + "\nexcept Exception as _e:\n"
+            "import traceback as _tb\n"
+            "try:\n" +
+            "\n".join("    " + line for line in script.splitlines()) + "\n"
+            "except Exception as _e:\n"
             "    print('UEOS_ERROR:' + _tb.format_exc().replace('\\n', ' | '))\n"
         )
-        raw = await self.run(wrapped, timeout=timeout)
+        raw = self.run(wrapped, timeout=timeout)
         return _parse_exec_result(raw)
 
+    # ── Internal ────────────────────────────────────────────────────────────
+
+    def _discover(self) -> str | None:
+        """
+        Send multicast ping, return the unreal node_id from the first pong.
+        Returns None if no UE instance responds within disc_timeout.
+        """
+        mcast = _open_multicast_socket(
+            self.bind_addr, self.group_ip, self.group_port, self.ttl
+        )
+        try:
+            ping_msg = _make_udp_msg("ping", self.source_id)
+            deadline = time.monotonic() + self.disc_timeout
+            while time.monotonic() < deadline:
+                mcast.sendto(ping_msg, (self.group_ip, self.group_port))
+                pong = _recv_json(mcast, "ping")
+                if pong and pong.get("type") == "pong":
+                    node_id = pong.get("source", "")
+                    log.debug(f"UE node found: {node_id}")
+                    return node_id
+            return None
+        finally:
+            mcast.close()
+
+    def _execute(self, command: str, exec_mode: str, timeout: int) -> dict:
+        """
+        Full round-trip: ping → open_connection → accept → command → result → close.
+        """
+        # ── Step 1: open multicast socket ──────────────────────────────────
+        mcast = _open_multicast_socket(
+            self.bind_addr, self.group_ip, self.group_port, self.ttl
+        )
+        try:
+            # ── Step 2: ping to get the node ID ────────────────────────────
+            node_id = None
+            ping_msg = _make_udp_msg("ping", self.source_id)
+            deadline = time.monotonic() + self.disc_timeout
+            while time.monotonic() < deadline:
+                mcast.sendto(ping_msg, (self.group_ip, self.group_port))
+                pong = _recv_json(mcast, "ping")
+                if pong and pong.get("type") == "pong":
+                    node_id = pong.get("source", "")
+                    break
+
+            if not node_id:
+                raise RuntimeError(
+                    "No Unreal Engine instance found via Remote Execution multicast. "
+                    "Check: Python Editor Script Plugin enabled, "
+                    "Project Settings → Plugins → Python → Enable Remote Execution ✅, "
+                    "Multicast Bind Address = 0.0.0.0 (or 127.0.0.1)"
+                )
+
+            # ── Step 3: create TCP server socket (WE listen, UE connects) ──
+            cmd_addr = _get_free_port()
+            cmd_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            cmd_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            cmd_sock.bind(cmd_addr)
+            cmd_sock.settimeout(2.0)
+            cmd_sock.listen()
+
+            # ── Step 4: send open_connection (tells UE our TCP port) ────────
+            open_msg = _make_udp_msg(
+                "open_connection",
+                self.source_id,
+                dest=node_id,
+                data={"command_ip": cmd_addr[0], "command_port": cmd_addr[1]},
+            )
+            mcast.sendto(open_msg, (self.group_ip, self.group_port))
+
+            # ── Step 5: accept UE's incoming TCP connection ─────────────────
+            try:
+                cmd_conn, _ = cmd_sock.accept()
+            except socket.timeout:
+                cmd_sock.close()
+                raise RuntimeError(
+                    "UE did not connect back on TCP port "
+                    f"{cmd_addr[1]} within 2s. "
+                    "Verify Remote Execution is enabled and multicast is working."
+                )
+            finally:
+                cmd_sock.close()   # stop listening; we have the connection
+
+            cmd_conn.settimeout(SOCKET_TIMEOUT)
+
+            try:
+                # ── Step 6: send command ────────────────────────────────────
+                cmd_id = str(uuid.uuid4())
+                cmd_msg = _make_udp_msg(
+                    "command",
+                    self.source_id,
+                    dest=node_id,
+                    data={
+                        "command":    command,
+                        "unattended": True,
+                        "exec_mode":  exec_mode,
+                    },
+                )
+                cmd_conn.sendto(cmd_msg, cmd_addr)
+
+                # ── Step 7: receive command_result ──────────────────────────
+                result = _recv_tcp_json(cmd_conn, "command", float(timeout))
+                if result is None:
+                    raise TimeoutError(
+                        f"No command_result from UE within {timeout}s"
+                    )
+                return result.get("data", {})
+
+            finally:
+                # ── Step 8: close_connection ────────────────────────────────
+                try:
+                    close_msg = _make_udp_msg(
+                        "close_connection", self.source_id, dest=node_id
+                    )
+                    mcast.sendto(close_msg, (self.group_ip, self.group_port))
+                except Exception:
+                    pass
+                try:
+                    cmd_conn.close()
+                except Exception:
+                    pass
+
+        finally:
+            mcast.close()
+
+
+# ── Result parser ─────────────────────────────────────────────────────────────
 
 def _parse_exec_result(raw: dict) -> dict:
-    """Parse UEOS_RESULT / UEOS_ERROR markers from Remote Execution output."""
+    """Parse UEOS_RESULT / UEOS_ERROR markers from a command_result data dict."""
     output_entries = raw.get("output", [])
-    all_output = "\n".join(
-        entry.get("output", "") for entry in output_entries
-        if isinstance(entry, dict)
-    )
+    if isinstance(output_entries, list):
+        all_output = "\n".join(
+            e.get("output", "") for e in output_entries if isinstance(e, dict)
+        )
+    else:
+        all_output = str(output_entries)
 
     result_val = None
     error_val  = None
