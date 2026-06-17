@@ -3,315 +3,136 @@ setlocal EnableDelayedExpansion
 title UEOS Setup
 cd /d "%~dp0"
 
-:: ============================================================
-::  UEOS — First-Time Setup
-::  Handles: Python install, pip deps, Claude config, UE check
-::  Safe to re-run any time.
-:: ============================================================
-
-:: Enable ANSI colors (Windows 10 1903+)
-reg query "HKCU\Console" /v VirtualTerminalLevel >nul 2>&1
-if errorlevel 1 reg add "HKCU\Console" /v VirtualTerminalLevel /t REG_DWORD /d 1 /f >nul 2>&1
-
-:: Color codes via PowerShell echo (fallback-safe)
-set "ESC="
-for /f %%a in ('powershell -NoProfile -Command "[char]27"') do set "ESC=%%a"
-set "GREEN=%ESC%[32m"
-set "YELLOW=%ESC%[33m"
-set "RED=%ESC%[31m"
-set "CYAN=%ESC%[36m"
-set "BOLD=%ESC%[1m"
-set "DIM=%ESC%[2m"
-set "RESET=%ESC%[0m"
-
 :: ── Banner ────────────────────────────────────────────────────────────────────
 echo.
-echo %BOLD%%CYAN%  ╔══════════════════════════════════════════════════╗%RESET%
-echo %BOLD%%CYAN%  ║         UEOS — First-Time Setup                  ║%RESET%
-echo %BOLD%%CYAN%  ║         Unreal Engine Operating System           ║%RESET%
-echo %BOLD%%CYAN%  ╚══════════════════════════════════════════════════╝%RESET%
+echo  ╔══════════════════════════════════════════════════╗
+echo  ║         UEOS — First-Time Setup                  ║
+echo  ║         Unreal Engine Operating System           ║
+echo  ╚══════════════════════════════════════════════════╝
 echo.
-echo %DIM%  This script sets up everything UEOS needs.%RESET%
-echo %DIM%  You only need to run this once.%RESET%
+echo  Setting up everything UEOS needs...
 echo.
-
-set SETUP_OK=1
-set PYTHON_JUST_INSTALLED=0
-
-:: ── Guard: re-launch in fresh shell after Python install ──────────────────────
-:: If we already installed Python this session, skip the install block
-if "%UEOS_RELAUNCH%"=="1" goto :check_python_version
 
 :: ============================================================
 ::  STEP 1 — Python
 :: ============================================================
-echo %BOLD%[1/5] Checking Python...%RESET%
-echo.
+echo [1/5] Checking Python...
 
 where python >nul 2>&1
-if %errorlevel% equ 0 goto :check_python_version
-
-:: Python not found — download and install silently
-echo %YELLOW%  ! Python not found.%RESET%
-echo %CYAN%  → Downloading Python 3.11.9 (this may take a minute)...%RESET%
-echo.
-
-:: Check curl is available (Windows 10 1803+)
-where curl >nul 2>&1
-if %errorlevel% neq 0 (
-    echo %RED%  ✗ curl not found.%RESET%
-    echo.
-    echo %YELLOW%  Your Windows version is too old to auto-install Python.%RESET%
-    echo %YELLOW%  Please install Python 3.11+ manually:%RESET%
-    echo %CYAN%  https://www.python.org/downloads/%RESET%
-    echo.
-    echo %DIM%  After installing Python, re-run this script.%RESET%
-    echo.
-    pause
-    exit /b 1
-)
-
-:: Download Python installer to temp
-set "PY_INSTALLER=%TEMP%\python_ueos_installer.exe"
-echo %DIM%  Downloading to: %PY_INSTALLER%%RESET%
-
-curl -L --progress-bar -o "%PY_INSTALLER%" "https://www.python.org/ftp/python/3.11.9/python-3.11.9-amd64.exe"
 if %errorlevel% neq 0 (
     echo.
-    echo %RED%  ✗ Download failed. Check your internet connection.%RESET%
-    echo %YELLOW%  Manual install: https://www.python.org/downloads/%RESET%
+    echo  Python not found. Downloading Python 3.11.9...
     echo.
-    pause
-    exit /b 1
+    where curl >nul 2>&1
+    if %errorlevel% neq 0 (
+        echo  ERROR: curl not found. Install Python manually:
+        echo  https://www.python.org/downloads/
+        pause
+        exit /b 1
+    )
+    set "PY_INSTALLER=%TEMP%\python_ueos_installer.exe"
+    curl -L --progress-bar -o "%PY_INSTALLER%" "https://www.python.org/ftp/python/3.11.9/python-3.11.9-amd64.exe"
+    if %errorlevel% neq 0 (
+        echo  Download failed. Install Python manually: https://www.python.org/downloads/
+        pause
+        exit /b 1
+    )
+    "%PY_INSTALLER%" /quiet InstallAllUsers=0 PrependPath=1 Include_test=0 Include_launcher=1
+    del "%PY_INSTALLER%" >nul 2>&1
+    echo  Python installed. Restarting setup in new shell...
+    set UEOS_RELAUNCH=1
+    start "" /wait cmd /c "%~f0"
+    exit /b 0
 )
 
-echo.
-echo %CYAN%  → Installing Python 3.11.9 silently...%RESET%
-echo %DIM%  (This takes ~30 seconds — do not close this window)%RESET%
-echo.
-
-"%PY_INSTALLER%" /quiet InstallAllUsers=0 PrependPath=1 Include_test=0 Include_launcher=1
-if %errorlevel% neq 0 (
-    echo %RED%  ✗ Python installation failed.%RESET%
-    echo %YELLOW%  Try running as Administrator, or install manually:%RESET%
-    echo %CYAN%  https://www.python.org/downloads/%RESET%
-    echo.
-    pause
-    exit /b 1
-)
-
-:: Clean up installer
-del "%PY_INSTALLER%" >nul 2>&1
-
-echo %GREEN%  ✓ Python 3.11.9 installed%RESET%
-set PYTHON_JUST_INSTALLED=1
-
-:: Re-launch this script in a fresh shell so PATH is refreshed
-echo.
-echo %CYAN%  → Refreshing environment and continuing setup...%RESET%
-echo.
-set UEOS_RELAUNCH=1
-start "" /wait cmd /c "%~f0"
-exit /b 0
-
-:: ── Verify Python version ──────────────────────────────────────────────────────
-:check_python_version
 for /f "tokens=2 delims= " %%v in ('python --version 2^>^&1') do set PY_VER=%%v
-for /f "tokens=1,2 delims=." %%a in ("%PY_VER%") do (
-    set PY_MAJOR=%%a
-    set PY_MINOR=%%b
-)
-
-if %PY_MAJOR% LSS 3 (
-    echo %RED%  ✗ Python %PY_VER% found — need 3.10 or higher%RESET%
-    echo %YELLOW%  Please install Python 3.11+: https://www.python.org/downloads/%RESET%
-    echo.
-    pause
-    exit /b 1
-)
-if %PY_MAJOR% EQU 3 if %PY_MINOR% LSS 10 (
-    echo %RED%  ✗ Python %PY_VER% found — need 3.10 or higher%RESET%
-    echo %YELLOW%  Please install Python 3.11+: https://www.python.org/downloads/%RESET%
-    echo.
-    pause
-    exit /b 1
-)
-
-echo %GREEN%  ✓ Python %PY_VER%%RESET%
+echo  OK: Python %PY_VER%
 echo.
 
 :: ============================================================
 ::  STEP 2 — pip dependencies
 :: ============================================================
-echo %BOLD%[2/5] Installing Python dependencies...%RESET%
-echo.
+echo [2/5] Installing dependencies...
 
-:: Quick check first — if all already installed, skip
 python -c "import mcp, aiohttp, dotenv, tkinter, fastapi, uvicorn" >nul 2>&1
 if %errorlevel% equ 0 (
-    echo %GREEN%  ✓ All dependencies already installed%RESET%
-    echo.
-    goto :step3
+    echo  OK: All dependencies already installed
+) else (
+    python -m pip install --upgrade pip --quiet
+    python -m pip install -r requirements.txt
+    if %errorlevel% neq 0 (
+        echo  ERROR: pip install failed. Try running as Administrator.
+        pause
+        exit /b 1
+    )
+    echo  OK: Dependencies installed
 )
-
-:: Install with visible progress
-echo %CYAN%  → Running: pip install -r requirements.txt%RESET%
-echo.
-python -m pip install --upgrade pip --quiet
-python -m pip install -r requirements.txt
-if %errorlevel% neq 0 (
-    echo.
-    echo %RED%  ✗ Dependency installation failed%RESET%
-    echo %YELLOW%  Try running as Administrator, or run manually:%RESET%
-    echo %CYAN%    pip install -r requirements.txt%RESET%
-    echo.
-    set SETUP_OK=0
-    pause
-    exit /b 1
-)
-
-echo.
-echo %GREEN%  ✓ All dependencies installed%RESET%
 echo.
 
 :: ============================================================
 ::  STEP 3 — Claude Desktop config
-::
-::  KEY BEHAVIOUR: if Claude Desktop isn't installed yet, we
-::  write a .claude_pending flag. UEOS.bat re-runs this inject
-::  silently on every launch, so the user never has to do it
-::  manually — it just works the next time they open UEOS after
-::  installing Claude Desktop.
 :: ============================================================
-:step3
-echo %BOLD%[3/5] Configuring Claude Desktop...%RESET%
-echo.
+echo [3/5] Configuring Claude Desktop...
 
 python setup\inject_claude_config.py
 set CLAUDE_RC=%errorlevel%
-
 if %CLAUDE_RC% equ 0 (
-    echo %GREEN%  ✓ Claude Desktop config written%RESET%
-    echo %DIM%    Restart Claude Desktop to activate UEOS%RESET%
-    :: Clear any pending flag since we succeeded
-    if exist ".claude_pending" del ".claude_pending" >nul 2>&1
+    echo  OK: Claude Desktop config written. Restart Claude Desktop.
 ) else if %CLAUDE_RC% equ 2 (
-    echo %GREEN%  ✓ UEOS already in Claude Desktop config%RESET%
-    if exist ".claude_pending" del ".claude_pending" >nul 2>&1
+    echo  OK: Claude Desktop already configured.
 ) else (
-    echo %YELLOW%  ! Claude Desktop not found on this machine yet%RESET%
-    echo.
-    echo %CYAN%  → Download Claude Desktop from: https://claude.ai/download%RESET%
-    echo %DIM%    Install it, then re-open UEOS — it will auto-configure itself.%RESET%
-    echo %DIM%    You do NOT need to run any script manually.%RESET%
-    :: Write pending flag — UEOS.bat will retry silently on every launch
-    echo 1 > .claude_pending
+    echo  NOTE: Claude Desktop not found. Install from https://claude.ai/download
+    echo  UEOS will configure it automatically next launch.
 )
 echo.
 
 :: ============================================================
-::  STEP 4 — Patch all UE project DefaultEngine.ini files
-::
-::  inject_ue_settings.py scans all .uproject files on the
-::  machine and patches their Config\DefaultEngine.ini to
-::  enable Remote Control Python execution. Safe to run
-::  repeatedly — only adds/updates the 3 required keys,
-::  never deletes anything.
-::
-::  Exit codes:
-::    0 = patched one or more projects
-::    2 = all projects already correctly configured
-::    1 = no UE projects found (UE not installed, or different drive)
+::  STEP 4 — UE project settings
 :: ============================================================
-echo %BOLD%[4/5] Configuring Unreal Engine projects...%RESET%
-echo.
+echo [4/5] Configuring Unreal Engine projects...
 
-:: Timeout after 30 seconds — drive scans should never hang setup
 python setup\inject_ue_settings.py
-set UE_PATCH=%errorlevel%
-
-if %UE_PATCH% equ 0 (
-    echo.
-    echo %GREEN%  ✓ UE project settings patched%RESET%
-    echo %YELLOW%  → Restart Unreal Engine for settings to take effect%RESET%
-) else if %UE_PATCH% equ 2 (
-    echo %GREEN%  ✓ UE projects already configured%RESET%
+set UE_RC=%errorlevel%
+if %UE_RC% equ 0 (
+    echo  OK: UE project settings patched. Restart UE5.
+) else if %UE_RC% equ 2 (
+    echo  OK: UE projects already configured.
 ) else (
-    echo %YELLOW%  ! No UE projects found on this machine%RESET%
-    echo %DIM%    That's OK — UEOS will patch settings automatically%RESET%
-    echo %DIM%    when you open a UE project and re-launch UEOS.%RESET%
-    echo.
-    echo %DIM%    If UEOS still can't run Python in UE, add this manually%RESET%
-    echo %DIM%    to your project's Config\DefaultEngine.ini:%RESET%
-    echo.
-    echo %CYAN%    [/Script/RemoteControl.RemoteControlSettings]%RESET%
-    echo %CYAN%    bRestrictServerAccess=False%RESET%
-    echo %CYAN%    bEnablePythonExecution=True%RESET%
-    echo.
-    echo %CYAN%    [/Script/PythonScriptPlugin.PythonScriptPluginSettings]%RESET%
-    echo %CYAN%    bRemoteExecution=True%RESET%
-    echo.
-)
-echo.
-
-:: Check if UE is currently reachable (informational only)
-python setup\check_ue.py >nul 2>&1
-if %errorlevel% equ 0 (
-    echo %GREEN%  ✓ Unreal Engine detected on port 30010%RESET%
-) else (
-    echo %DIM%  (UE not running right now — that's fine, connect it later)%RESET%
-    echo %DIM%    Plugins needed: "Remote Control API" + "Python Editor Script Plugin"%RESET%
+    echo  NOTE: No UE projects found. Will auto-patch when you open one.
 )
 echo.
 
 :: ============================================================
-::  STEP 5 — Write setup marker + create .env
+::  STEP 5 — Finalise
 :: ============================================================
-echo %BOLD%[5/5] Finalising...%RESET%
-echo.
+echo [5/5] Finalising...
 
-:: Copy .env.example → .env if it doesn't exist
 if not exist ".env" (
     if exist ".env.example" (
         copy ".env.example" ".env" >nul
-        echo %GREEN%  ✓ Created .env from template%RESET%
+        echo  OK: Created .env
     )
 )
 
 :: Write setup complete marker
-echo 1 > .setup_complete
-echo %GREEN%  ✓ Setup marker written%RESET%
+echo 1>.setup_complete
+echo  OK: Setup complete
 echo.
 
-:: ── Summary ──────────────────────────────────────────────────────────────────
-echo %BOLD%%CYAN%  ╔══════════════════════════════════════════════════╗%RESET%
-echo %BOLD%%CYAN%  ║                 Setup Complete!                  ║%RESET%
-echo %BOLD%%CYAN%  ╚══════════════════════════════════════════════════╝%RESET%
+:: ── Done ─────────────────────────────────────────────────────────────────────
+echo  ╔══════════════════════════════════════════════════╗
+echo  ║              Setup Complete!                     ║
+echo  ╚══════════════════════════════════════════════════╝
 echo.
-echo %BOLD%  What to do now:%RESET%
+echo  Next steps:
+echo  1. Restart Claude Desktop
+echo  2. Open Unreal Engine 5.4 with Remote Control plugins enabled
+echo  3. In Claude Desktop ask: "run ueos_status"
 echo.
-echo %GREEN%  1.%RESET% Restart Claude Desktop (if it's open)
-echo %GREEN%  2.%RESET% Open Unreal Engine 5.4 with Remote Control plugins enabled
-echo %GREEN%  3.%RESET% Double-click %BOLD%UEOS.bat%RESET% to launch the control panel
-echo %GREEN%  4.%RESET% In Claude Desktop, ask: %CYAN%"run ueos_status"%RESET%
+echo  Launching dashboard in 3 seconds...
 echo.
-echo %DIM%  Optional: add your Tripo API key in the UEOS launcher (API Keys tab)%RESET%
-echo %DIM%  for text-to-3D and image-to-3D generation.%RESET%
-echo.
-echo %DIM%  NOTE: If Claude Desktop was not installed, UEOS will auto-configure%RESET%
-echo %DIM%  it the next time you launch UEOS after installing Claude Desktop.%RESET%
-echo %DIM%  No extra steps needed.%RESET%
-echo.
+timeout /t 3 /nobreak >nul
 
-if %SETUP_OK% equ 1 (
-    echo %GREEN%  All done! Launching UEOS in 3 seconds...%RESET%
-    echo.
-    timeout /t 3 /nobreak >nul
-    start "" python ui\launcher.py
-) else (
-    echo %YELLOW%  Setup finished with warnings. See above for details.%RESET%
-    echo.
-    pause
-)
+start "" python ui\launcher.py
 
 endlocal
