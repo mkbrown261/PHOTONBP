@@ -101,12 +101,13 @@ from api_clients.metatailor  import MetaTailorClient
 from remote_control.client import UnrealRemoteControl
 
 # ── Logging ───────────────────────────────────────────────────────────────────
+_LOG_FILE = Path(__file__).parent / "ueos.log"
 logging.basicConfig(
     level=os.getenv("UEOS_LOG_LEVEL", "INFO"),
     format="%(asctime)s [UEOS] %(levelname)s: %(message)s",
     handlers=[
         logging.StreamHandler(sys.stdout),
-        logging.FileHandler("ueos.log", encoding="utf-8")
+        logging.FileHandler(str(_LOG_FILE), encoding="utf-8")
     ]
 )
 log = logging.getLogger("ueos")
