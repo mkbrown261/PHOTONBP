@@ -1921,15 +1921,43 @@ class UEOSLauncher(tk.Tk):
 # ─────────────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    if sys.platform == "win32":
-        import ctypes
-        # Enable DPI awareness for sharp rendering on Windows
+    import traceback
+
+    # Crash log — written next to this file so errors are never lost
+    CRASH_LOG = Path(__file__).parent / "launcher_crash.log"
+
+    try:
+        if sys.platform == "win32":
+            import ctypes
+            try:
+                ctypes.windll.shcore.SetProcessDpiAwareness(1)
+            except Exception:
+                pass
+            os.system("")
+
+        app = UEOSLauncher()
+        app.mainloop()
+
+    except Exception:
+        # Write crash details to a log file next to launcher.py
+        err = traceback.format_exc()
         try:
-            ctypes.windll.shcore.SetProcessDpiAwareness(1)
+            CRASH_LOG.write_text(err, encoding="utf-8")
         except Exception:
             pass
-        # Enable ANSI in any attached console
-        os.system("")
 
-    app = UEOSLauncher()
-    app.mainloop()
+        # Try to show a messagebox — works even if the main window never opened
+        try:
+            import tkinter as _tk
+            from tkinter import messagebox as _mb
+            _root = _tk.Tk()
+            _root.withdraw()
+            _mb.showerror(
+                "UEOS Crashed",
+                f"UEOS failed to start.\n\nError:\n{err}\n\nFull details saved to:\n{CRASH_LOG}",
+            )
+            _root.destroy()
+        except Exception:
+            pass
+
+        sys.exit(1)

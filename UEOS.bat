@@ -51,17 +51,14 @@ if %errorlevel% neq 0 (
 
 :: ── Launch GUI ───────────────────────────────────────────────────────────────
 echo  Starting UEOS...
-start "" pythonw ui\launcher.py
+start "" python ui\launcher.py
 if %errorlevel% neq 0 (
-    :: pythonw failed — fall back to python (shows console, but works)
-    python ui\launcher.py
-    if %errorlevel% neq 0 (
-        echo.
-        echo  ERROR: Could not launch UEOS launcher.
-        echo  Try running SETUP.bat again.
-        echo.
-        pause
-    )
+    echo.
+    echo  ERROR: Could not launch UEOS launcher.
+    echo.
+    echo  Check ui\launcher_crash.log for details.
+    echo.
+    pause
 )
 
 endlocal

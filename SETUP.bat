@@ -307,8 +307,7 @@ if %SETUP_OK% equ 1 (
     echo %GREEN%  All done! Launching UEOS in 3 seconds...%RESET%
     echo.
     timeout /t 3 /nobreak >nul
-    start "" pythonw ui\launcher.py
-    if %errorlevel% neq 0 start "" python ui\launcher.py
+    start "" python ui\launcher.py
 ) else (
     echo %YELLOW%  Setup finished with warnings. See above for details.%RESET%
     echo.
