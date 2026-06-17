@@ -52,13 +52,13 @@ def _glob_limited(root: Path, max_depth: int, seen: set, found: list):
         with os.scandir(root) as it:
             for entry in it:
                 try:
-                    if entry.is_file(False) and entry.name.endswith(".uproject"):
+                    if entry.is_file() and entry.name.endswith(".uproject"):
                         ini_path = Path(entry.path).parent / "Config" / "DefaultEngine.ini"
                         key = str(ini_path).lower()
                         if key not in seen:
                             seen.add(key)
                             found.append(ini_path)
-                    elif entry.is_dir(False) and max_depth > 0:
+                    elif entry.is_dir() and max_depth > 0:
                         # Skip hidden dirs, system dirs, and known time-wasters
                         skip = {"$recycle.bin", "windows", "program files",
                                 "program files (x86)", "programdata", "system volume information",
