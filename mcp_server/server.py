@@ -588,33 +588,41 @@ async def handle_diagnose() -> list[types.TextContent]:  # noqa: C901
     info("This is how UEOS actually runs Python — NOT the HTTP CDO approach")
     info("Requires: Python Editor Script Plugin enabled + Enable Remote Execution ✅")
     py_ok = False
-    from remote_control.remote_execution import UnrealRemoteExecution, DEFAULT_MULTICAST_GROUP_IP, DEFAULT_MULTICAST_GROUP_PORT
+    from remote_control.remote_execution import (
+        UnrealRemoteExecution,
+        MULTICAST_GROUP_IP, MULTICAST_GROUP_PORT,
+        EXEC_MODE_EXEC_STATEMENT,
+    )
     re_client = UnrealRemoteExecution(command_timeout=10, discovery_timeout=3.0)
     try:
-        info(f"Sending UDP multicast ping to {DEFAULT_MULTICAST_GROUP_IP}:{DEFAULT_MULTICAST_GROUP_PORT} ...")
-        node = await re_client._discover_node()
-        ok(f"UE node discovered: {node}")
-        info("Opening TCP command connection ...")
-        from remote_control.remote_execution import _TCPCommandConnection
-        import uuid as _uuid
-        src_id = str(_uuid.uuid4())
-        conn = _TCPCommandConnection(node, src_id, timeout=10)
-        await conn.open()
-        ok("TCP command connection opened")
-        info("Running test Python command: print('UEOS_DIAG:ok')")
-        result = await conn.run_command("print('UEOS_DIAG:ok')")
-        await conn.close()
-        raw("Full result", _json.dumps(result))
-        output_text = " | ".join(
-            e.get("output", "") for e in result.get("output", []) if isinstance(e, dict)
+        info(f"Sending UDP multicast ping to {MULTICAST_GROUP_IP}:{MULTICAST_GROUP_PORT} ...")
+        # _discover() is synchronous — run in executor so we don't block the event loop
+        loop = asyncio.get_event_loop()
+        node_id = await loop.run_in_executor(None, re_client._discover)
+        if node_id:
+            ok(f"UE node discovered: node_id={node_id}")
+        else:
+            raise RuntimeError("No UE node responded to ping")
+        info("Running test Python command via full round-trip: print('UEOS_DIAG:ok')")
+        result = await loop.run_in_executor(
+            None,
+            lambda: re_client._execute("print('UEOS_DIAG:ok')", exec_mode=EXEC_MODE_EXEC_STATEMENT, timeout=10)
         )
+        raw("Full result", _json.dumps(result))
+        output_entries = result.get("output", [])
+        if isinstance(output_entries, list):
+            output_text = " | ".join(
+                e.get("output", "") for e in output_entries if isinstance(e, dict)
+            )
+        else:
+            output_text = str(output_entries)
         raw("Output", output_text)
         if result.get("success") and "UEOS_DIAG:ok" in output_text:
             ok("✅ FULL ROUND-TRIP WORKS — Python executed and output returned")
             py_ok = True
         elif result.get("success"):
-            ok("HTTP success but output marker missing")
-            info("Python ran but stdout may not be captured in output field")
+            ok("Command succeeded but UEOS_DIAG marker not seen in output")
+            info("Python ran; stdout capture may differ by exec mode")
             py_ok = True
         else:
             fail(f"Command returned success=False: {result}")
