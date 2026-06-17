@@ -1,9 +1,9 @@
 @echo off
-setlocal
+setlocal EnableDelayedExpansion
 title UEOS Launcher
 cd /d "%~dp0"
 
-:: ── First-run guard ───────────────────────────────────────────────────────────
+:: ── First-run guard ─────────────────────────────────────────────────────────
 if not exist ".setup_complete" (
     echo.
     echo  First run detected — launching UEOS Setup...
@@ -16,11 +16,30 @@ if not exist ".setup_complete" (
 where python >nul 2>&1
 if %errorlevel% neq 0 (
     echo.
-    echo  ERROR: Python not found.
-    echo  Please run SETUP.bat first.
+    echo  ERROR: Python not found. Please run SETUP.bat first.
     echo.
     pause
     exit /b 1
+)
+
+:: ── Silent auto-fix: re-inject configs on every launch (safe / idempotent) ──
+::
+::    Both scripts exit 0 (changed) or 2 (already correct) — never destructive.
+::    This means users NEVER have to manually run anything after Claude Desktop
+::    is installed post-setup, or after adding a new UE project.
+::
+echo  Checking configuration...
+python setup\inject_claude_config.py >nul 2>&1
+set CLAUDE_RC=%errorlevel%
+
+python setup\inject_ue_settings.py >nul 2>&1
+set UE_RC=%errorlevel%
+
+:: If Claude Desktop was newly detected this run, show a one-time notice
+if %CLAUDE_RC% equ 0 (
+    echo.
+    echo  ✓ UEOS added to Claude Desktop — please restart Claude Desktop.
+    echo.
 )
 
 :: ── Quick dependency check ───────────────────────────────────────────────────
@@ -34,6 +53,7 @@ if %errorlevel% neq 0 (
 echo  Starting UEOS...
 start "" pythonw ui\launcher.py
 if %errorlevel% neq 0 (
+    :: pythonw failed — fall back to python (shows console, but works)
     python ui\launcher.py
     if %errorlevel% neq 0 (
         echo.

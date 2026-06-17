@@ -205,6 +205,103 @@ class UEOSLauncher(tk.Tk):
         if not ENV_FILE.exists() and EXAMPLE.exists():
             shutil.copy(EXAMPLE, ENV_FILE)
 
+        # ── Silent auto-fix on every launch ──────────────────────────────
+        # Run both inject scripts in the background.  They are idempotent:
+        #   exit 0 = something was fixed/written
+        #   exit 2 = already correct, nothing changed
+        # This means users never have to manually run a script — opening
+        # UEOS is always enough.
+        self.after(1200, self._silent_autofix)
+
+    # ──────────────────────────────────────────────────────────────────────
+    # Silent auto-fix / Fix All
+    # ──────────────────────────────────────────────────────────────────────
+
+    def _silent_autofix(self):
+        """
+        Run inject_claude_config.py + inject_ue_settings.py silently in the
+        background on every launch.  Both scripts are idempotent (exit 2 when
+        nothing changes) so this is always safe.  If Claude config was newly
+        written, refresh the health bar so the pill goes green immediately.
+        """
+        setup_dir = str(ROOT / "setup")
+
+        def _run():
+            # ── Claude Desktop ───────────────────────────────────────────
+            try:
+                result_claude = subprocess.run(
+                    [sys.executable, str(ROOT / "setup" / "inject_claude_config.py")],
+                    capture_output=True
+                )
+                claude_fixed = (result_claude.returncode == 0)
+            except Exception:
+                claude_fixed = False
+
+            # ── UE project ini ───────────────────────────────────────────
+            try:
+                subprocess.run(
+                    [sys.executable, str(ROOT / "setup" / "inject_ue_settings.py")],
+                    capture_output=True
+                )
+            except Exception:
+                pass
+
+            # If Claude config was newly written, refresh health bar
+            if claude_fixed:
+                self.after(0, self._refresh_health_bar)
+
+        threading.Thread(target=_run, daemon=True).start()
+
+    def _fix_all(self):
+        """
+        Dashboard 'Fix All' button — runs both inject scripts visibly and
+        shows a results dialog.  Refreshes the health bar when done.
+        """
+        self._hbar_fix_btn.configure(state="disabled", text="🔧 Fixing…")
+
+        def _run():
+            lines = []
+
+            # ── Claude Desktop ───────────────────────────────────────────
+            try:
+                r = subprocess.run(
+                    [sys.executable, str(ROOT / "setup" / "inject_claude_config.py")],
+                    capture_output=True, text=True
+                )
+                if r.returncode == 0:
+                    lines.append("✅  Claude Desktop config written.\n    Restart Claude Desktop to activate UEOS.")
+                elif r.returncode == 2:
+                    lines.append("✓  Claude Desktop already configured.")
+                else:
+                    lines.append("⚠  Claude Desktop not found.\n    Install it from https://claude.ai/download\n    then click Fix All again.")
+            except Exception as e:
+                lines.append(f"✗  Claude inject error: {e}")
+
+            # ── UE project ini ───────────────────────────────────────────
+            try:
+                r = subprocess.run(
+                    [sys.executable, str(ROOT / "setup" / "inject_ue_settings.py")],
+                    capture_output=True, text=True
+                )
+                if r.returncode == 0:
+                    lines.append("✅  UE project settings patched.\n    Restart Unreal Engine for changes to take effect.")
+                elif r.returncode == 2:
+                    lines.append("✓  UE projects already configured.")
+                else:
+                    lines.append("⚠  No UE projects found on this machine.\n    Open a UE project then click Fix All again.")
+            except Exception as e:
+                lines.append(f"✗  UE inject error: {e}")
+
+            msg = "\n\n".join(lines)
+            self.after(0, lambda: self._fix_all_done(msg))
+
+        threading.Thread(target=_run, daemon=True).start()
+
+    def _fix_all_done(self, msg: str):
+        self._hbar_fix_btn.configure(state="normal", text="🔧 Fix Issues")
+        messagebox.showinfo("Fix All — Results", msg, parent=self)
+        self._refresh_health_bar()
+
     # ──────────────────────────────────────────────────────────────────────
     # Styling
     # ──────────────────────────────────────────────────────────────────────
@@ -325,10 +422,12 @@ class UEOSLauncher(tk.Tk):
             self._hbar_pills[key] = {"dot": dot, "lbl": lbl}
 
         # Right side: fix button (hidden unless something is wrong)
+        # _fix_all runs both inject scripts and shows results — works always,
+        # even after first-run wizard is dismissed.
         self._hbar_fix_btn = ttk.Button(
-            self._hbar, text="⚡ Fix Issues",
+            self._hbar, text="🔧 Fix Issues",
             style="Secondary.TButton",
-            command=self._show_wizard_tab)
+            command=self._fix_all)
         self._hbar_fix_btn.pack(side="right", padx=12, pady=4)
         self._hbar_fix_btn.pack_forget()  # hidden by default
 
@@ -480,7 +579,7 @@ class UEOSLauncher(tk.Tk):
                 "key":   "ue_plugins",
                 "num":   "3",
                 "title": "Unreal Engine Plugins",
-                "desc":  'In UE: Edit → Plugins → enable "Remote Control API" + "Python Editor Script Plugin" → restart UE.',
+                "desc":  'In UE: Edit → Plugins → enable "Remote Control API" + "Python Editor Script Plugin" → restart UE.  UEOS auto-patches your project\'s DefaultEngine.ini — no manual ini editing needed.',
                 "auto":  False,
                 "check": self._wiz_check_ue,
                 "fix":   self._wiz_open_ue_plugin_guide,
@@ -805,6 +904,7 @@ class UEOSLauncher(tk.Tk):
 
         btns = [
             ("🔄  Check All Status",    self._poll_status_now),
+            ("🔧  Fix All Issues",       self._fix_all),
             ("📂  Open .env File",      self._open_env_file),
             ("📋  Copy Claude Config",  self._copy_claude_config),
             ("🌐  Tripo Dashboard",     lambda: webbrowser.open("https://platform.tripo3d.ai")),

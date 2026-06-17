@@ -24,7 +24,7 @@ set "BOLD=%ESC%[1m"
 set "DIM=%ESC%[2m"
 set "RESET=%ESC%[0m"
 
-:: ── Banner ───────────────────────────────────────────────────────────────────
+:: ── Banner ────────────────────────────────────────────────────────────────────
 echo.
 echo %BOLD%%CYAN%  ╔══════════════════════════════════════════════════╗%RESET%
 echo %BOLD%%CYAN%  ║         UEOS — First-Time Setup                  ║%RESET%
@@ -38,7 +38,7 @@ echo.
 set SETUP_OK=1
 set PYTHON_JUST_INSTALLED=0
 
-:: ── Guard: re-launch in fresh shell after Python install ─────────────────────
+:: ── Guard: re-launch in fresh shell after Python install ──────────────────────
 :: If we already installed Python this session, skip the install block
 if "%UEOS_RELAUNCH%"=="1" goto :check_python_version
 
@@ -111,10 +111,10 @@ echo.
 echo %CYAN%  → Refreshing environment and continuing setup...%RESET%
 echo.
 set UEOS_RELAUNCH=1
-start "" /wait cmd /c ""%~f0""
+start "" /wait cmd /c "%~f0"
 exit /b 0
 
-:: ── Verify Python version ────────────────────────────────────────────────────
+:: ── Verify Python version ──────────────────────────────────────────────────────
 :check_python_version
 for /f "tokens=2 delims= " %%v in ('python --version 2^>^&1') do set PY_VER=%%v
 for /f "tokens=1,2 delims=." %%a in ("%PY_VER%") do (
@@ -176,44 +176,72 @@ echo.
 
 :: ============================================================
 ::  STEP 3 — Claude Desktop config
+::
+::  KEY BEHAVIOUR: if Claude Desktop isn't installed yet, we
+::  write a .claude_pending flag. UEOS.bat re-runs this inject
+::  silently on every launch, so the user never has to do it
+::  manually — it just works the next time they open UEOS after
+::  installing Claude Desktop.
 :: ============================================================
 :step3
 echo %BOLD%[3/5] Configuring Claude Desktop...%RESET%
 echo.
 
-:: Inject the UEOS MCP entry using Python (handles JSON safely)
 python setup\inject_claude_config.py
-if %errorlevel% equ 0 (
-    echo %GREEN%  ✓ Claude Desktop config updated%RESET%
+set CLAUDE_RC=%errorlevel%
+
+if %CLAUDE_RC% equ 0 (
+    echo %GREEN%  ✓ Claude Desktop config written%RESET%
     echo %DIM%    Restart Claude Desktop to activate UEOS%RESET%
-) else if %errorlevel% equ 2 (
+    :: Clear any pending flag since we succeeded
+    if exist ".claude_pending" del ".claude_pending" >nul 2>&1
+) else if %CLAUDE_RC% equ 2 (
     echo %GREEN%  ✓ UEOS already in Claude Desktop config%RESET%
+    if exist ".claude_pending" del ".claude_pending" >nul 2>&1
 ) else (
-    echo %YELLOW%  ! Claude Desktop not found on this machine%RESET%
-    echo %DIM%    Download from: https://claude.ai/download%RESET%
-    echo %DIM%    After installing, re-run this script OR use the%RESET%
-    echo %DIM%    'Claude Setup' tab in the UEOS launcher.%RESET%
+    echo %YELLOW%  ! Claude Desktop not found on this machine yet%RESET%
+    echo.
+    echo %CYAN%  → Download Claude Desktop from: https://claude.ai/download%RESET%
+    echo %DIM%    Install it, then re-open UEOS — it will auto-configure itself.%RESET%
+    echo %DIM%    You do NOT need to run any script manually.%RESET%
+    :: Write pending flag — UEOS.bat will retry silently on every launch
+    echo 1 > .claude_pending
 )
 echo.
 
 :: ============================================================
-::  STEP 4 — Patch UE project settings + connection check
+::  STEP 4 — Patch all UE project DefaultEngine.ini files
+::
+::  inject_ue_settings.py scans all .uproject files on the
+::  machine and patches their Config\DefaultEngine.ini to
+::  enable Remote Control Python execution. Safe to run
+::  repeatedly — only adds/updates the 3 required keys,
+::  never deletes anything.
+::
+::  Exit codes:
+::    0 = patched one or more projects
+::    2 = all projects already correctly configured
+::    1 = no UE projects found (UE not installed, or different drive)
 :: ============================================================
 echo %BOLD%[4/5] Configuring Unreal Engine projects...%RESET%
 echo.
 
-:: Patch all UE projects to allow Remote Control Python execution
 python setup\inject_ue_settings.py
 set UE_PATCH=%errorlevel%
 
 if %UE_PATCH% equ 0 (
     echo.
+    echo %GREEN%  ✓ UE project settings patched%RESET%
     echo %YELLOW%  → Restart Unreal Engine for settings to take effect%RESET%
 ) else if %UE_PATCH% equ 2 (
     echo %GREEN%  ✓ UE projects already configured%RESET%
 ) else (
-    echo %YELLOW%  ! Could not auto-patch UE projects%RESET%
-    echo %DIM%    Add this manually to your project's Config\DefaultEngine.ini:%RESET%
+    echo %YELLOW%  ! No UE projects found on this machine%RESET%
+    echo %DIM%    That's OK — UEOS will patch settings automatically%RESET%
+    echo %DIM%    when you open a UE project and re-launch UEOS.%RESET%
+    echo.
+    echo %DIM%    If UEOS still can't run Python in UE, add this manually%RESET%
+    echo %DIM%    to your project's Config\DefaultEngine.ini:%RESET%
     echo.
     echo %CYAN%    [/Script/RemoteControl.RemoteControlSettings]%RESET%
     echo %CYAN%    bRestrictServerAccess=False%RESET%
@@ -222,17 +250,15 @@ if %UE_PATCH% equ 0 (
     echo %CYAN%    [/Script/PythonScriptPlugin.PythonScriptPluginSettings]%RESET%
     echo %CYAN%    bRemoteExecution=True%RESET%
     echo.
-    echo %DIM%    Then restart UE5 and rerun this setup.%RESET%
 )
 echo.
 
-:: Also check if UE is currently reachable
+:: Check if UE is currently reachable (informational only)
 python setup\check_ue.py >nul 2>&1
-set UE_CHECK=%errorlevel%
-if %UE_CHECK% equ 0 (
+if %errorlevel% equ 0 (
     echo %GREEN%  ✓ Unreal Engine detected on port 30010%RESET%
 ) else (
-    echo %DIM%  ^(UE not running right now — that's fine, connect it later^)%RESET%
+    echo %DIM%  (UE not running right now — that's fine, connect it later)%RESET%
     echo %DIM%    Plugins needed: "Remote Control API" + "Python Editor Script Plugin"%RESET%
 )
 echo.
@@ -270,6 +296,10 @@ echo %GREEN%  4.%RESET% In Claude Desktop, ask: %CYAN%"run ueos_status"%RESET%
 echo.
 echo %DIM%  Optional: add your Tripo API key in the UEOS launcher (API Keys tab)%RESET%
 echo %DIM%  for text-to-3D and image-to-3D generation.%RESET%
+echo.
+echo %DIM%  NOTE: If Claude Desktop was not installed, UEOS will auto-configure%RESET%
+echo %DIM%  it the next time you launch UEOS after installing Claude Desktop.%RESET%
+echo %DIM%  No extra steps needed.%RESET%
 echo.
 
 if %SETUP_OK% equ 1 (
