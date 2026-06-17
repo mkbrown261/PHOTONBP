@@ -1,18 +1,18 @@
 """
-Unreal Engine 5.4 Remote Control HTTP Client
-Phase 2 — Optimized
+Unreal Engine 5.4 Remote Control Client
+Phase 7 — Dual-protocol
 
-Handles all communication with the UE Remote Control API (default port 30010).
+Python execution uses UE's Remote Execution protocol (multicast UDP discovery
++ TCP command socket). This is the only reliable way to run arbitrary Python
+in the editor — the HTTP CDO approach (Default__PythonScriptLibrary) is
+blocked by UE's security model regardless of INI settings.
 
-Key upgrades over Phase 1:
-  - Retry logic with exponential back-off for transient failures
-  - Structured output parser supporting all UEOS_ prefixes
-  - Multi-result collector (reads ALL prefixed lines, not just first)
-  - execute_python_ex() — wraps script in try/except, returns clean JSON
-  - Helper: run_asset_python() — locks a ticket around heavy asset ops
-  - Preset helpers: get_selected_actors(), get_level_actors_by_class()
-  - Verbose debug logging toggle
-  - UE 5.4-specific: handles /remote/object/call returning 200 with body
+Property get/set and batch calls still use the HTTP Remote Control API
+(port 30010) which works without any security bypass.
+
+Execution priority:
+  1. Remote Execution (UDP/TCP) — for execute_python / execute_python_ex
+  2. HTTP RC API               — for get_property / set_property / batch_call
 """
 
 import asyncio
@@ -22,6 +22,12 @@ import time
 from typing import Any, Optional
 
 import aiohttp
+
+from remote_control.remote_execution import (
+    UnrealRemoteExecution,
+    EXEC_MODE_EXEC_STATEMENT,
+    _parse_exec_result,
+)
 
 log = logging.getLogger("ueos.rc")
 
@@ -57,7 +63,10 @@ PY_PLUGIN_PATH = "/Script/PythonScriptPlugin.Default__PythonScriptLibrary"
 
 class UnrealRemoteControl:
     """
-    Async HTTP client for Unreal Engine 5.4 Remote Control API.
+    Dual-protocol client for Unreal Engine 5.4.
+
+    Python execution  → Remote Execution (UDP discovery + TCP)
+    Property access   → HTTP Remote Control API (port 30010)
 
     All public methods are coroutines (use with await).
     """
@@ -78,6 +87,9 @@ class UnrealRemoteControl:
         self.retry_delay = retry_delay
         self.verbose     = verbose
         self._set_timeout(timeout)
+
+        # Remote Execution client (UDP/TCP — for Python)
+        self._re = UnrealRemoteExecution(command_timeout=timeout)
 
     def _set_timeout(self, seconds: int):
         self.timeout = aiohttp.ClientTimeout(
@@ -165,46 +177,40 @@ class UnrealRemoteControl:
         return await self._request("GET", endpoint)
 
     # ──────────────────────────────────────────────────────────────────────
-    # Python script execution — the workhorse
+    # Python script execution — via Remote Execution (UDP/TCP)
     # ──────────────────────────────────────────────────────────────────────
 
     async def execute_python(self, script: str, timeout: int = 30) -> dict:
         """
-        Execute a Python script inside the UE 5.4 editor via Remote Control.
+        Execute a Python script inside UE via the Remote Execution protocol.
 
-        The script has full access to `import unreal`.
-        Use UEOS_RESULT:<json> to return data, UEOS_ERROR:<msg> for errors.
+        Uses UDP multicast discovery + TCP command socket — not the HTTP CDO
+        approach, which is blocked by UE's security model.
 
-        Returns the raw Remote Control response dict (has "output" key with stdout).
+        Returns a dict compatible with the old HTTP response format:
+          { "output": "<all stdout lines joined>", "success": bool }
         """
-        self._set_timeout(timeout)
-        payload = {
-            "objectPath":   PY_PLUGIN_PATH,
-            "functionName": "ExecutePythonScript",
-            "parameters":   {"PythonScript": script}
-        }
-        result = await self._put(EP_CALL, payload)
+        self._re.command_timeout = timeout
+        raw = await self._re.run(script, exec_mode=EXEC_MODE_EXEC_STATEMENT)
+
+        # Normalise to legacy format so all callers keep working unchanged
+        output_entries = raw.get("output", [])
+        output_text = "\n".join(
+            e.get("output", "") for e in output_entries if isinstance(e, dict)
+        )
         if self.verbose:
-            log.debug(f"Python output: {result.get('output', '')[:500]}")
-        return result
+            log.debug(f"RE output: {output_text[:500]}")
+        return {"output": output_text, "success": raw.get("success", False)}
 
     async def execute_python_ex(self, script: str, timeout: int = 30) -> dict:
         """
-        Like execute_python() but auto-wraps in try/except and forces
-        a UEOS_RESULT / UEOS_ERROR output line.
+        Like execute_python() but auto-wraps in try/except and parses
+        UEOS_RESULT / UEOS_ERROR markers.
 
-        Guarantees the returned dict has:
-          { "ok": bool, "result": Any | None, "error": str | None, "raw_output": str }
+        Returns: { "ok": bool, "result": Any, "error": str | None, "raw_output": str }
         """
-        wrapped = f"""
-import unreal, json, traceback
-try:
-{chr(10).join('    ' + line for line in script.splitlines())}
-except Exception as _ueos_ex:
-    print("UEOS_ERROR:" + traceback.format_exc().replace("\\n", " | "))
-"""
-        raw = await self.execute_python(wrapped, timeout=timeout)
-        return self._parse_output_ex(raw)
+        self._re.command_timeout = timeout
+        return await self._re.run_ex(script, timeout=timeout)
 
     def _parse_output_ex(self, raw_result: dict) -> dict:
         """
@@ -491,19 +497,17 @@ print("UEOS_RESULT:" + world.get_name())
                 "PythonScript": f'exec(open(r"{file_path}", encoding="utf-8").read())'
             }
         }
-        return await self._put(EP_CALL, payload)
+        # Use Remote Execution for file execution too
+        script = f'exec(open(r"{file_path}", encoding="utf-8").read())'
+        return await self.execute_python(script)
 
     # ──────────────────────────────────────────────────────────────────────
     # Connectivity
     # ──────────────────────────────────────────────────────────────────────
 
     async def ping(self) -> bool:
-        """Return True if Unreal Remote Control is reachable."""
-        try:
-            await self.get_engine_info()
-            return True
-        except Exception:
-            return False
+        """Return True if UE Remote Execution is reachable (UDP discovery)."""
+        return await self._re.ping()
 
     async def wait_for_ue(self, timeout: int = 60, poll_interval: float = 2.0) -> bool:
         """

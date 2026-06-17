@@ -582,111 +582,76 @@ async def handle_diagnose() -> list[types.TextContent]:  # noqa: C901
         lines.append("  ⏭️   SKIPPED (Layer 2 failed)")
 
     # ──────────────────────────────────────────────────────────────────────────
-    # LAYER 4 — PUT /remote/object/call (PythonScriptLibrary)
+    # LAYER 4 — Remote Execution (UDP multicast + TCP) — the CORRECT Python path
     # ──────────────────────────────────────────────────────────────────────────
-    section("LAYER 4 — Python Execution (PythonScriptLibrary CDO)")
+    section("LAYER 4 — Remote Execution Protocol (UDP discovery + TCP command)")
+    info("This is how UEOS actually runs Python — NOT the HTTP CDO approach")
+    info("Requires: Python Editor Script Plugin enabled + Enable Remote Execution ✅")
     py_ok = False
-    py_body = ""
+    from remote_control.remote_execution import UnrealRemoteExecution, DEFAULT_MULTICAST_GROUP_IP, DEFAULT_MULTICAST_GROUP_PORT
+    re_client = UnrealRemoteExecution(command_timeout=10, discovery_timeout=3.0)
+    try:
+        info(f"Sending UDP multicast ping to {DEFAULT_MULTICAST_GROUP_IP}:{DEFAULT_MULTICAST_GROUP_PORT} ...")
+        node = await re_client._discover_node()
+        ok(f"UE node discovered: {node}")
+        info("Opening TCP command connection ...")
+        from remote_control.remote_execution import _TCPCommandConnection
+        import uuid as _uuid
+        src_id = str(_uuid.uuid4())
+        conn = _TCPCommandConnection(node, src_id, timeout=10)
+        await conn.open()
+        ok("TCP command connection opened")
+        info("Running test Python command: print('UEOS_DIAG:ok')")
+        result = await conn.run_command("print('UEOS_DIAG:ok')")
+        await conn.close()
+        raw("Full result", _json.dumps(result))
+        output_text = " | ".join(
+            e.get("output", "") for e in result.get("output", []) if isinstance(e, dict)
+        )
+        raw("Output", output_text)
+        if result.get("success") and "UEOS_DIAG:ok" in output_text:
+            ok("✅ FULL ROUND-TRIP WORKS — Python executed and output returned")
+            py_ok = True
+        elif result.get("success"):
+            ok("HTTP success but output marker missing")
+            info("Python ran but stdout may not be captured in output field")
+            py_ok = True
+        else:
+            fail(f"Command returned success=False: {result}")
+            verdict = f"LAYER 4 FAIL — Remote Execution returned failure: {result}"
+    except Exception as e:
+        fail(f"{type(e).__name__}: {e}")
+        verdict = (
+            f"LAYER 4 FAIL — Remote Execution unreachable: {type(e).__name__}: {e}. "
+            "Fix: In UE → Edit → Project Settings → Plugins → Python → "
+            "✅ Enable Remote Execution, Multicast Bind Address = 0.0.0.0, restart UE."
+        )
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # LAYER 5 — HTTP CDO test (for reference only — expected to fail on UE 5.4)
+    # ──────────────────────────────────────────────────────────────────────────
+    section("LAYER 5 — HTTP CDO Call (legacy — expected to return 400 on UE 5.4)")
+    info("Default__PythonScriptLibrary is blocked by UE security — this is informational only")
     if http_ok:
-        payload = {
+        payload_cdo = {
             "objectPath":   "/Script/PythonScriptPlugin.Default__PythonScriptLibrary",
             "functionName": "ExecutePythonScript",
             "parameters":   {"PythonScript": "print('UEOS_DIAG:ok')"}
         }
-        raw("Request payload", _json.dumps(payload))
         try:
-            timeout = aiohttp.ClientTimeout(total=15, connect=4)
-            async with aiohttp.ClientSession(timeout=timeout) as s:
-                async with s.put(f"{base}/remote/object/call", json=payload) as resp:
-                    py_body = await resp.text()
+            timeout_http = aiohttp.ClientTimeout(total=8, connect=4)
+            async with aiohttp.ClientSession(timeout=timeout_http) as s:
+                async with s.put(f"{base}/remote/object/call", json=payload_cdo) as resp:
+                    cdo_body = await resp.text()
                     raw("Status", str(resp.status))
-                    raw("Body",   py_body)
+                    raw("Body",   cdo_body)
                     if resp.status == 200:
-                        if "UEOS_DIAG:ok" in py_body:
-                            ok("Python executed AND output returned — full round-trip works")
-                            py_ok = True
-                        else:
-                            ok(f"HTTP 200 received but output marker missing — partial success")
-                            info("This usually means Python ran but stdout capture isn't configured")
-                            info("Expected 'UEOS_DIAG:ok' in output field")
-                            py_ok = True  # 200 is good enough — execution works
-                            verdict = (
-                                "LAYER 4 PARTIAL — Python executes (HTTP 200) but output not "
-                                "captured. Check UE Output Log for 'UEOS_DIAG:ok' to confirm."
-                            )
-                    elif resp.status == 400:
-                        fail(f"HTTP 400 — RC rejected the Python call")
-                        raw("Full 400 body", py_body)
-                        # Decode known 400 reasons
-                        b = py_body.lower()
-                        if "restrict" in b or "security" in b or "access" in b:
-                            verdict = (
-                                "LAYER 4 FAIL (400 — Security block) — "
-                                "bRestrictServerAccess=True or bEnablePythonExecution=False "
-                                "in DefaultEngine.ini. Run UEOS.bat to auto-patch, then restart UE."
-                            )
-                        elif "pythonscript" in b or "not found" in b or "unknown" in b:
-                            verdict = (
-                                "LAYER 4 FAIL (400 — Object not found) — "
-                                "Python Script Plugin is not enabled or the CDO path is wrong. "
-                                "In UE: Edit → Plugins → 'Python Editor Script Plugin' → enable → restart."
-                            )
-                        elif "function" in b:
-                            verdict = (
-                                "LAYER 4 FAIL (400 — Function not found) — "
-                                "ExecutePythonScript function not found on the Python CDO. "
-                                f"Full UE response: {py_body}"
-                            )
-                        else:
-                            verdict = (
-                                f"LAYER 4 FAIL (400) — UE rejected the call. "
-                                f"Full UE response: {py_body}"
-                            )
-                    elif resp.status == 403:
-                        fail(f"HTTP 403 Forbidden")
-                        verdict = (
-                            "LAYER 4 FAIL (403) — RC server is blocking the request. "
-                            "Set bRestrictServerAccess=False in DefaultEngine.ini → "
-                            "[/Script/RemoteControl.RemoteControlSettings] section. "
-                            "Run UEOS.bat to auto-patch, then restart UE."
-                        )
+                        ok("CDO call succeeded (unexpected — UE security may be relaxed)")
                     else:
-                        fail(f"HTTP {resp.status}")
-                        verdict = f"LAYER 4 FAIL (HTTP {resp.status}) — Full body: {py_body}"
+                        info(f"HTTP {resp.status} — expected on UE 5.4 (CDO is blocked by design)")
+                        info("UEOS uses Remote Execution (Layer 4) instead — this result doesn't matter")
         except Exception as e:
-            fail(f"Request threw {type(e).__name__}: {e}")
-            verdict = f"LAYER 4 FAIL — Exception: {type(e).__name__}: {e}"
-    else:
-        lines.append("  ⏭️   SKIPPED (Layer 2 failed)")
-
-    # ──────────────────────────────────────────────────────────────────────────
-    # LAYER 5 — PUT /remote/object/call (EditorLevelLibrary — no Python needed)
-    # ──────────────────────────────────────────────────────────────────────────
-    section("LAYER 5 — Non-Python RC Call (EditorLevelLibrary)")
-    if http_ok and not py_ok:
-        # Only run this if Python failed — helps isolate whether it's Python-specific
-        payload2 = {
-            "objectPath":   "/Script/EditorScriptingUtilities.Default__EditorLevelLibrary",
-            "functionName": "GetAllLevelActors",
-            "parameters":   {}
-        }
-        try:
-            timeout = aiohttp.ClientTimeout(total=10, connect=4)
-            async with aiohttp.ClientSession(timeout=timeout) as s:
-                async with s.put(f"{base}/remote/object/call", json=payload2) as resp:
-                    body2 = await resp.text()
-                    raw("Status", str(resp.status))
-                    raw("Body",   body2[:400])
-                    if resp.status == 200:
-                        ok("EditorLevelLibrary call succeeded — RC object/call works, issue is Python-specific")
-                        info("Python Script Plugin is likely disabled or CDO path is wrong")
-                    else:
-                        fail(f"HTTP {resp.status} — Even non-Python RC calls fail")
-                        info("This confirms a global RC security block, not a Python-specific issue")
-        except Exception as e:
-            fail(f"Request threw {type(e).__name__}: {e}")
-    elif py_ok:
-        ok("SKIPPED — Python layer already passed, no need to test")
+            info(f"CDO test threw {type(e).__name__}: {e} (irrelevant — UEOS uses Layer 4)")
     else:
         lines.append("  ⏭️   SKIPPED (Layer 2 failed)")
 
