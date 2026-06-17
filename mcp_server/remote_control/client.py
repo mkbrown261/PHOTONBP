@@ -135,7 +135,7 @@ class UnrealRemoteControl:
                             delay *= 2
                             continue
 
-                        raise RuntimeError(f"UE RC HTTP {resp.status}: {text[:400]}")
+                        raise RuntimeError(f"UE RC HTTP {resp.status}: {text}")
 
             except aiohttp.ClientConnectorError as e:
                 last_ex = e
@@ -183,7 +183,7 @@ class UnrealRemoteControl:
             "functionName": "ExecutePythonScript",
             "parameters":   {"PythonScript": script}
         }
-        result = await self._post(EP_CALL, payload)
+        result = await self._put(EP_CALL, payload)
         if self.verbose:
             log.debug(f"Python output: {result.get('output', '')[:500]}")
         return result
@@ -332,7 +332,7 @@ except Exception as e:
             "parameters":        parameters or {},
             "generateTransaction": transaction
         }
-        return await self._post(EP_CALL, payload)
+        return await self._put(EP_CALL, payload)
 
     # ──────────────────────────────────────────────────────────────────────
     # Asset registry helpers
@@ -450,7 +450,7 @@ print("UEOS_RESULT:" + world.get_name())
         Each request dict must have: objectPath, functionName, parameters.
         """
         payload = {"requests": requests}
-        return await self._post(EP_BATCH, payload)
+        return await self._put(EP_BATCH, payload)
 
     async def execute_python_batch(
         self,
@@ -491,7 +491,7 @@ print("UEOS_RESULT:" + world.get_name())
                 "PythonScript": f'exec(open(r"{file_path}", encoding="utf-8").read())'
             }
         }
-        return await self._post(EP_CALL, payload)
+        return await self._put(EP_CALL, payload)
 
     # ──────────────────────────────────────────────────────────────────────
     # Connectivity
