@@ -184,47 +184,30 @@ class UnrealRemoteControl:
         """
         Execute a Python script inside UE via the Remote Execution protocol.
 
-        Uses ExecuteFile mode (via exec(open(tmp).read())) when the script
-        contains imports or multiple statements — this avoids a UE Remote
-        Execution quirk where multi-line scripts with imports swallow output
-        in ExecuteStatement mode.
+        Single-line scripts  → ExecuteStatement mode (fast, direct)
+        Multi-line scripts   → ExecuteFile mode (handles imports, output correctly)
 
-        Returns a dict compatible with the old HTTP response format:
-          { "output": "<all stdout lines joined>", "success": bool }
+        ExecuteFile mode sends the full script text directly in the JSON payload.
+        UE receives it and runs it as a complete Python file — no temp files,
+        no path issues, imports work, output is captured correctly.
+
+        Returns: { "output": "<all stdout lines joined>", "success": bool }
         """
-        import tempfile, os as _os
         self._re.command_timeout = timeout
         loop = asyncio.get_event_loop()
 
-        # Detect multi-line or import-containing scripts
-        needs_file = "\n" in script.strip() or script.strip().startswith("import ") or script.strip().startswith("from ")
+        stripped = script.strip()
+        is_multiline = "\n" in stripped
 
-        if needs_file:
-            # Write to temp file, execute via single exec() statement
-            tmp = tempfile.NamedTemporaryFile(
-                mode="w", suffix=".py", delete=False,
-                prefix="ueos_exec_", encoding="utf-8"
-            )
-            tmp.write(script)
-            tmp.flush()
-            tmp.close()
-            tmp_path = tmp.name.replace("\\", "/")
-            run_script = f'exec(open(r"{tmp_path}", encoding="utf-8").read())'
+        if is_multiline:
+            exec_mode = EXEC_MODE_EXEC_FILE
         else:
-            tmp_path = None
-            run_script = script
+            exec_mode = EXEC_MODE_EXEC_STATEMENT
 
-        try:
-            raw = await loop.run_in_executor(
-                None,
-                lambda: self._re.run(run_script, exec_mode=EXEC_MODE_EXEC_STATEMENT)
-            )
-        finally:
-            if tmp_path:
-                try:
-                    _os.unlink(tmp_path)
-                except Exception:
-                    pass
+        raw = await loop.run_in_executor(
+            None,
+            lambda: self._re.run(stripped, exec_mode=exec_mode)
+        )
 
         # Normalise to legacy format so all callers keep working unchanged
         output_entries = raw.get("output", [])
