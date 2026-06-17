@@ -291,16 +291,32 @@ class UnrealRemoteControl:
         script = """
 import unreal, json
 try:
+    proj_file = unreal.Paths.get_project_file_path().replace("\\\\", "/")
+    proj_name = proj_file.split("/")[-1].replace(".uproject", "")
     info = {
         "engineVersion": str(unreal.SystemLibrary.get_engine_version()),
-        "projectName":   unreal.Paths.get_project_file_path().split("/")[-1].replace(".uproject",""),
+        "projectName":   proj_name,
+        "projectFile":   proj_file,
         "projectDir":    unreal.Paths.project_dir(),
         "contentDir":    unreal.Paths.project_content_dir(),
         "platform":      str(unreal.SystemLibrary.get_platform_name()),
     }
     print("UEOS_INFO:" + json.dumps(info))
-except Exception as e:
-    print("UEOS_ERROR:" + str(e))
+except Exception as _e1:
+    try:
+        proj_file = unreal.Paths.get_project_file_path().replace("\\\\", "/")
+        proj_name = proj_file.split("/")[-1].replace(".uproject", "")
+        info = {
+            "engineVersion": "unknown",
+            "projectName":   proj_name,
+            "projectFile":   proj_file,
+            "projectDir":    unreal.Paths.project_dir(),
+            "contentDir":    unreal.Paths.project_content_dir(),
+            "platform":      "unknown",
+        }
+        print("UEOS_INFO:" + json.dumps(info))
+    except Exception as _e2:
+        print("UEOS_ERROR:" + str(_e2))
 """
         result = await self.execute_python(script)
         raw = self.parse_output(result, "UEOS_INFO:")
