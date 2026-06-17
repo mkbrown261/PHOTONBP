@@ -191,13 +191,20 @@ class UnrealRemoteControl:
           { "output": "<all stdout lines joined>", "success": bool }
         """
         self._re.command_timeout = timeout
-        raw = await self._re.run(script, exec_mode=EXEC_MODE_EXEC_STATEMENT)
+        loop = asyncio.get_event_loop()
+        raw = await loop.run_in_executor(
+            None,
+            lambda: self._re.run(script, exec_mode=EXEC_MODE_EXEC_STATEMENT)
+        )
 
         # Normalise to legacy format so all callers keep working unchanged
         output_entries = raw.get("output", [])
-        output_text = "\n".join(
-            e.get("output", "") for e in output_entries if isinstance(e, dict)
-        )
+        if isinstance(output_entries, list):
+            output_text = "\n".join(
+                e.get("output", "") for e in output_entries if isinstance(e, dict)
+            )
+        else:
+            output_text = str(output_entries)
         if self.verbose:
             log.debug(f"RE output: {output_text[:500]}")
         return {"output": output_text, "success": raw.get("success", False)}
@@ -210,7 +217,11 @@ class UnrealRemoteControl:
         Returns: { "ok": bool, "result": Any, "error": str | None, "raw_output": str }
         """
         self._re.command_timeout = timeout
-        return await self._re.run_ex(script, timeout=timeout)
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(
+            None,
+            lambda: self._re.run_ex(script, timeout=timeout)
+        )
 
     def _parse_output_ex(self, raw_result: dict) -> dict:
         """
@@ -507,7 +518,8 @@ print("UEOS_RESULT:" + world.get_name())
 
     async def ping(self) -> bool:
         """Return True if UE Remote Execution is reachable (UDP discovery)."""
-        return await self._re.ping()
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, self._re.ping)
 
     async def wait_for_ue(self, timeout: int = 60, poll_interval: float = 2.0) -> bool:
         """
