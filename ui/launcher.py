@@ -132,8 +132,9 @@ def validate_tripo(key: str) -> tuple[bool, str]:
         )
         with urllib.request.urlopen(req, timeout=8) as resp:
             data = json.loads(resp.read())
-            bal  = data.get("data", {}).get("balance", "?")
-            return True, f"Valid  •  Balance: {bal} credits"
+            bal_data = data.get("data", {})
+            bal = bal_data.get("balance", bal_data.get("credits", bal_data.get("available", "?")))
+            return True, f"Valid ✓  •  Balance: {bal} credits (frozen: {bal_data.get('frozen', 0)})"
     except urllib.error.HTTPError as e:
         if e.code == 401:
             return False, "Invalid key (401 Unauthorized)"
