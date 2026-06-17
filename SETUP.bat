@@ -197,23 +197,43 @@ if %errorlevel% equ 0 (
 echo.
 
 :: ============================================================
-::  STEP 4 — Unreal Engine connection check
+::  STEP 4 — Patch UE project settings + connection check
 :: ============================================================
-echo %BOLD%[4/5] Checking Unreal Engine connection...%RESET%
+echo %BOLD%[4/5] Configuring Unreal Engine projects...%RESET%
 echo.
 
+:: Patch all UE projects to allow Remote Control Python execution
+python setup\inject_ue_settings.py
+set UE_PATCH=%errorlevel%
+
+if %UE_PATCH% equ 0 (
+    echo.
+    echo %YELLOW%  → Restart Unreal Engine for settings to take effect%RESET%
+) else if %UE_PATCH% equ 2 (
+    echo %GREEN%  ✓ UE projects already configured%RESET%
+) else (
+    echo %YELLOW%  ! Could not auto-patch UE projects%RESET%
+    echo %DIM%    Add this manually to your project's Config\DefaultEngine.ini:%RESET%
+    echo.
+    echo %CYAN%    [/Script/RemoteControl.RemoteControlSettings]%RESET%
+    echo %CYAN%    bRestrictServerAccess=False%RESET%
+    echo %CYAN%    bEnablePythonExecution=True%RESET%
+    echo.
+    echo %CYAN%    [/Script/PythonScriptPlugin.PythonScriptPluginSettings]%RESET%
+    echo %CYAN%    bRemoteExecution=True%RESET%
+    echo.
+    echo %DIM%    Then restart UE5 and rerun this setup.%RESET%
+)
+echo.
+
+:: Also check if UE is currently reachable
 python setup\check_ue.py >nul 2>&1
 set UE_CHECK=%errorlevel%
 if %UE_CHECK% equ 0 (
-    echo %GREEN%  ✓ Unreal Engine detected — Remote Control API active%RESET%
+    echo %GREEN%  ✓ Unreal Engine detected on port 30010%RESET%
 ) else (
-    echo %YELLOW%  ! Unreal Engine not detected right now ^(that's OK^)%RESET%
-    echo.
-    echo %DIM%  To connect UE later:%RESET%
-    echo %DIM%    1. Open Unreal Engine 5.x%RESET%
-    echo %DIM%    2. Edit → Plugins → enable "Remote Control API"%RESET%
-    echo %DIM%    3. Edit → Plugins → enable "Python Editor Script Plugin"%RESET%
-    echo %DIM%    4. Restart UE — port 30010 opens automatically%RESET%
+    echo %DIM%  ^(UE not running right now — that's fine, connect it later^)%RESET%
+    echo %DIM%    Plugins needed: "Remote Control API" + "Python Editor Script Plugin"%RESET%
 )
 echo.
 
