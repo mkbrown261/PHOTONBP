@@ -902,106 +902,199 @@ async def handle_diagnose() -> list[types.TextContent]:  # noqa: C901
 
 async def handle_screenshot(args: dict) -> list:
     """
-    Take a viewport screenshot inside UE, read the PNG bytes via the bridge,
-    and return them as an MCP ImageContent so Claude can see the image inline.
+    Take a viewport screenshot inside UE, resize it to a Claude-friendly size,
+    base64-encode it inside UE Python, and return it as MCP ImageContent.
 
-    Flow:
-      1. Python inside UE executes a HighResShot console command to a temp file
-      2. Python polls until the file appears on disk (max 8s)
-      3. Python reads the bytes, base64-encodes them, returns via UEOS_RESULT
-      4. MCP server decodes and returns types.ImageContent
+    Key facts learned from debugging:
+      - UE 5.4 editor saves HighResShot to Saved/Screenshots/WindowsEditor/ (NOT Windows/)
+      - Full 1920x1080 PNG is too large to transit the bridge as base64 JSON
+      - We capture at full res then downsample to 960x540 inside UE using
+        a pure-Python PNG resize (no Pillow required — UE ships without it)
+      - sys.executable anchors the relative UE path to an absolute Windows path
     """
-    import base64
-
     width  = int(args.get("width",  1920))
     height = int(args.get("height", 1080))
-
-    # Clamp to sane values — UE will hang on huge shots
     width  = max(320, min(width,  3840))
     height = max(240, min(height, 2160))
 
+    # Deliver at half resolution for Claude — sharp enough to see everything,
+    # small enough to transit the bridge without hitting JSON size limits
+    thumb_w = width  // 2
+    thumb_h = height // 2
+
     script = f"""
-import unreal, json, os, time, base64
+import unreal, json, os, time, base64, sys, struct, zlib
 
-width  = {width}
-height = {height}
+width   = {width}
+height  = {height}
+thumb_w = {thumb_w}
+thumb_h = {thumb_h}
 
-# ── Step 1: resolve absolute project directory ─────────────────────────────
-# unreal.Paths returns paths RELATIVE to Engine/Binaries/Win64/ on Windows.
-# Strategy: use sys.executable (the UE Python interpreter) to anchor the path.
-# sys.executable is always an absolute path inside the UE install.
-import sys
-proj_file_rel = unreal.Paths.get_project_file_path().replace("\\\\\\\\", "/").replace("\\\\", "/")
+# ── Resolve absolute project dir ──────────────────────────────────────────
+# UE returns paths relative to Engine/Binaries/Win64/.
+# sys.executable is always absolute and lives in that exact directory.
+proj_rel  = unreal.Paths.get_project_file_path().replace("\\\\\\\\", "/").replace("\\\\", "/")
+exe_dir   = os.path.dirname(os.path.abspath(sys.executable))
+proj_abs  = os.path.normpath(os.path.join(exe_dir, proj_rel))
+proj_dir  = os.path.dirname(proj_abs)
+if not os.path.isdir(proj_dir):
+    # Fallback: use project_saved_dir which is also relative but cross-check
+    saved_rel = unreal.Paths.project_saved_dir().replace("\\\\\\\\", "/").replace("\\\\", "/")
+    saved_abs = os.path.normpath(os.path.join(exe_dir, saved_rel))
+    proj_dir  = os.path.dirname(saved_abs)  # one level up from Saved/
 
-# sys.executable = C:/Program Files/Epic Games/UE_5.4/Engine/Binaries/Win64/python.exe
-# or similar — its directory IS Engine/Binaries/Win64
-exe_dir      = os.path.dirname(os.path.abspath(sys.executable))
-proj_abs     = os.path.normpath(os.path.join(exe_dir, proj_file_rel))
-proj_dir_abs = os.path.dirname(proj_abs)
-
-# Sanity check — if the resolved dir doesn't exist, try CWD as anchor
-if not os.path.isdir(proj_dir_abs):
-    proj_abs     = os.path.normpath(os.path.join(os.getcwd(), proj_file_rel))
-    proj_dir_abs = os.path.dirname(proj_abs)
-
-screenshots_dir = os.path.join(proj_dir_abs, "Saved", "Screenshots", "Windows")
-
-# ── Step 2: generate a unique filename ────────────────────────────────────
-ts       = int(time.time() * 1000)
-filename = f"ueos_shot_{{ts}}.png"
-filepath = os.path.join(screenshots_dir, filename)
-
-# Make sure the directory exists — UE creates it lazily
+# UE 5.4 editor saves to WindowsEditor, not Windows
+# (Windows/ is for packaged game builds; WindowsEditor/ is for in-editor shots)
+screenshots_dir = os.path.join(proj_dir, "Saved", "Screenshots", "WindowsEditor")
 os.makedirs(screenshots_dir, exist_ok=True)
 
-# ── Step 3: trigger the screenshot ────────────────────────────────────────
-world = unreal.EditorLevelLibrary.get_editor_world()
-cmd   = f"HighResShot {{width}}x{{height}} filename={{filepath}}"
-unreal.SystemLibrary.execute_console_command(world, cmd)
+# ── Unique filename with ms timestamp ─────────────────────────────────────
+ts       = int(time.time() * 1000)
+filename = f"ueos_{{ts}}.png"
+filepath = os.path.join(screenshots_dir, filename)
 
-# ── Step 4: poll for the file (UE writes async on next render frame) ──────
-deadline = time.time() + 10.0
+# ── Trigger HighResShot ───────────────────────────────────────────────────
+world = unreal.EditorLevelLibrary.get_editor_world()
+# Pass the absolute filepath so UE saves exactly there
+unreal.SystemLibrary.execute_console_command(
+    world, f"HighResShot {{width}}x{{height}} filename={{filepath}}"
+)
+
+# ── Poll for file (HighResShot is async — renders on next frame) ──────────
+deadline = time.time() + 12.0
 found    = False
 while time.time() < deadline:
-    if os.path.exists(filepath) and os.path.getsize(filepath) > 1024:
-        found = True
-        break
-    time.sleep(0.15)
+    try:
+        if os.path.exists(filepath) and os.path.getsize(filepath) > 2048:
+            found = True
+            break
+    except OSError:
+        pass
+    time.sleep(0.2)
 
-if not found:
-    # Try the simpler default screenshot path as fallback
-    default_dir = screenshots_dir
-    candidates  = []
-    if os.path.isdir(default_dir):
-        candidates = sorted(
-            [os.path.join(default_dir, f) for f in os.listdir(default_dir) if f.endswith(".png")],
-            key=os.path.getmtime, reverse=True
-        )
-    if candidates and (time.time() - os.path.getmtime(candidates[0])) < 15:
-        filepath = candidates[0]
+# Fallback: grab the most recent PNG in the dir if our file didn't appear
+# (some UE versions ignore the filename parameter and use their own naming)
+if not found and os.path.isdir(screenshots_dir):
+    pngs = sorted(
+        [os.path.join(screenshots_dir, f)
+         for f in os.listdir(screenshots_dir) if f.lower().endswith(".png")],
+        key=os.path.getmtime, reverse=True
+    )
+    if pngs and (time.time() - os.path.getmtime(pngs[0])) < 20:
+        filepath = pngs[0]
         found    = True
 
 if not found:
-    print("UEOS_ERROR:Screenshot file did not appear within 10 seconds at: " + filepath)
+    print("UEOS_ERROR:Screenshot did not appear in " + screenshots_dir +
+          " within 12s. Check UE Output Log for HighResShot errors.")
 else:
+    # ── Read the PNG ──────────────────────────────────────────────────────
     with open(filepath, "rb") as fh:
-        img_bytes = fh.read()
-    b64 = base64.b64encode(img_bytes).decode("ascii")
-    result = {{
-        "ok":       True,
-        "path":     filepath,
-        "width":    width,
-        "height":   height,
-        "size_kb":  len(img_bytes) // 1024,
-        "b64":      b64,
-    }}
-    print("UEOS_RESULT:" + json.dumps(result))
+        raw = fh.read()
+
+    orig_kb = len(raw) // 1024
+
+    # ── Downsample to thumb_w x thumb_h using pure Python ─────────────────
+    # Parse PNG manually (no PIL needed) — extract IHDR and IDAT chunks,
+    # decode scanlines, nearest-neighbour resize, re-encode as PNG.
+    def _read_png_pixels(data):
+        \"\"\"Return (w, h, pixels) where pixels is list of [R,G,B,A] rows.\"\"\"
+        assert data[:8] == b\'\\x89PNG\\r\\n\\x1a\\n\', "Not a PNG"
+        pos = 8
+        idat_chunks = []
+        w = h = bit_depth = color_type = 0
+        while pos < len(data):
+            length = struct.unpack(">I", data[pos:pos+4])[0]
+            chunk_type = data[pos+4:pos+8]
+            chunk_data = data[pos+8:pos+8+length]
+            if chunk_type == b\'IHDR\':
+                w, h = struct.unpack(">II", chunk_data[:8])
+                bit_depth, color_type = chunk_data[8], chunk_data[9]
+            elif chunk_type == b\'IDAT\':
+                idat_chunks.append(chunk_data)
+            elif chunk_type == b\'IEND\':
+                break
+            pos += 12 + length
+        raw_data = zlib.decompress(b"".join(idat_chunks))
+        # channels: 2=RGB(3), 6=RGBA(4)
+        channels = 4 if color_type == 6 else 3
+        stride   = w * channels + 1  # +1 for filter byte
+        rows     = []
+        prev     = [0] * (w * channels)
+        for r in range(h):
+            filt  = raw_data[r * stride]
+            row   = list(raw_data[r * stride + 1 : r * stride + 1 + w * channels])
+            if filt == 1:   # Sub
+                for i in range(channels, len(row)):
+                    row[i] = (row[i] + row[i - channels]) & 0xFF
+            elif filt == 2: # Up
+                row = [(row[i] + prev[i]) & 0xFF for i in range(len(row))]
+            elif filt == 3: # Average
+                for i in range(len(row)):
+                    a = row[i - channels] if i >= channels else 0
+                    row[i] = (row[i] + (a + prev[i]) // 2) & 0xFF
+            elif filt == 4: # Paeth
+                def paeth(a,b,c):
+                    p=a+b-c; pa=abs(p-a); pb=abs(p-b); pc=abs(p-c)
+                    return a if pa<=pb and pa<=pc else (b if pb<=pc else c)
+                for i in range(len(row)):
+                    a = row[i-channels] if i>=channels else 0
+                    b = prev[i]; c = prev[i-channels] if i>=channels else 0
+                    row[i] = (row[i] + paeth(a,b,c)) & 0xFF
+            rows.append(row)
+            prev = row
+        return w, h, rows, channels
+
+    def _encode_png(w, h, rows, channels):
+        \"\"\"Encode pixel rows back to PNG bytes.\"\"\"
+        def chunk(name, data):
+            c = struct.pack(">I", len(data)) + name + data
+            return c + struct.pack(">I", zlib.crc32(name + data) & 0xFFFFFFFF)
+        ct = 6 if channels == 4 else 2
+        ihdr = struct.pack(">IIBBBBB", w, h, 8, ct, 0, 0, 0)
+        idat_raw = b""
+        for row in rows:
+            idat_raw += b"\\x00" + bytes(row)
+        return (b"\\x89PNG\\r\\n\\x1a\\n" +
+                chunk(b"IHDR", ihdr) +
+                chunk(b"IDAT", zlib.compress(idat_raw, 6)) +
+                chunk(b"IEND", b""))
+
+    try:
+        src_w, src_h, src_rows, channels = _read_png_pixels(raw)
+        # Nearest-neighbour downsample
+        dst_rows = []
+        for dy in range(thumb_h):
+            sy  = int(dy * src_h / thumb_h)
+            src = src_rows[sy]
+            row = []
+            for dx in range(thumb_w):
+                sx = int(dx * src_w / thumb_w) * channels
+                row.extend(src[sx:sx+channels])
+            dst_rows.append(row)
+        thumb_bytes = _encode_png(thumb_w, thumb_h, dst_rows, channels)
+        encode_note = f"resized {{src_w}}x{{src_h}} → {{thumb_w}}x{{thumb_h}}"
+    except Exception as resize_err:
+        # Resize failed — send original (may be large but better than nothing)
+        thumb_bytes = raw
+        encode_note = f"resize failed ({{resize_err}}), sending original"
+
+    b64 = base64.b64encode(thumb_bytes).decode("ascii")
+    print("UEOS_RESULT:" + json.dumps({{
+        "ok":          True,
+        "path":        filepath,
+        "orig_kb":     orig_kb,
+        "thumb_kb":    len(thumb_bytes) // 1024,
+        "thumb_w":     thumb_w,
+        "thumb_h":     thumb_h,
+        "encode_note": encode_note,
+        "b64":         b64,
+    }}))
 """
 
-    result = await ue.execute_python(script, timeout=20)
+    result = await ue.execute_python(script, timeout=25)
     output = result.get("output", "")
 
-    # Parse UEOS_RESULT from output
     shot_data = None
     error_msg = None
     for line in output.split("\n"):
@@ -1009,13 +1102,17 @@ else:
         if line.startswith("UEOS_RESULT:"):
             try:
                 shot_data = json.loads(line[len("UEOS_RESULT:"):])
-            except Exception:
-                pass
+            except Exception as parse_err:
+                error_msg = f"JSON parse error: {parse_err} — line length {len(line)}"
         elif line.startswith("UEOS_ERROR:"):
             error_msg = line[len("UEOS_ERROR:"):]
 
     if shot_data and shot_data.get("b64"):
-        log.info(f"Screenshot OK — {shot_data.get('size_kb', '?')}KB @ {shot_data.get('path', '?')}")
+        log.info(
+            f"Screenshot OK — orig {shot_data.get('orig_kb','?')}KB → "
+            f"thumb {shot_data.get('thumb_kb','?')}KB "
+            f"({shot_data.get('encode_note','')})"
+        )
         return [
             types.ImageContent(
                 type="image",
@@ -1025,24 +1122,25 @@ else:
             types.TextContent(
                 type="text",
                 text=(
-                    f"📸 Screenshot captured — {width}×{height}px, "
-                    f"{shot_data.get('size_kb', '?')}KB\n"
-                    f"Saved to: {shot_data.get('path', 'unknown')}"
+                    f"📸 {shot_data.get('thumb_w','?')}×{shot_data.get('thumb_h','?')}px  "
+                    f"({shot_data.get('thumb_kb','?')}KB from "
+                    f"{shot_data.get('orig_kb','?')}KB original)\n"
+                    f"Path: {shot_data.get('path','?')}"
                 )
             ),
         ]
 
-    # Failure path — return diagnostic text
     return [types.TextContent(
         type="text",
         text=(
             f"❌ Screenshot failed.\n"
-            f"Error: {error_msg or 'No UEOS_RESULT received'}\n"
-            f"Raw output: {output[:600]}\n\n"
-            f"Troubleshooting:\n"
-            f"  1. Make sure the UE viewport is visible (not minimized)\n"
-            f"  2. Run ueos_diagnose to confirm the bridge is working\n"
-            f"  3. Check UE Output Log for HighResShot errors"
+            f"Error: {error_msg or 'No UEOS_RESULT in bridge output'}\n"
+            f"Raw output (first 800 chars):\n{output[:800]}\n\n"
+            f"Likely causes:\n"
+            f"  • UE viewport is minimized or occluded\n"
+            f"  • HighResShot is writing to an unexpected path\n"
+            f"  • Bridge JSON response was truncated (file too large)\n"
+            f"Run ueos_diagnose to confirm bridge health."
         )
     )]
 
