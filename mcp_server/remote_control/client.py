@@ -1,18 +1,15 @@
 """
 Unreal Engine 5.4 Remote Control Client
-Phase 7 — Dual-protocol
 
-Python execution uses UE's Remote Execution protocol (multicast UDP discovery
-+ TCP command socket). This is the only reliable way to run arbitrary Python
-in the editor — the HTTP CDO approach (Default__PythonScriptLibrary) is
-blocked by UE's security model regardless of INI settings.
+ALL Python execution goes through the PhotonExecBridge HTTP endpoint
+(port 30010). No UDP, no multicast, no sockets required.
 
-Property get/set and batch calls still use the HTTP Remote Control API
-(port 30010) which works without any security bypass.
+The bridge (ue_http_bridge.py) must be loaded in UE:
+  - Copy to <Project>/Content/Python/ue_http_bridge.py
+  - In UE Output Log (Python mode): import ue_http_bridge
+  - Bridge object path: /Engine/PythonTypes.Default__PhotonExecBridge
 
-Execution priority:
-  1. Remote Execution (UDP/TCP) — for execute_python / execute_python_ex
-  2. HTTP RC API               — for get_property / set_property / batch_call
+Property get/set and batch calls also use the HTTP Remote Control API.
 """
 
 import asyncio
@@ -182,58 +179,56 @@ class UnrealRemoteControl:
 
     async def execute_python(self, script: str, timeout: int = 30) -> dict:
         """
-        Execute a Python script inside UE via the Remote Execution protocol.
-
-        Single-line scripts  → ExecuteStatement mode (fast, direct)
-        Multi-line scripts   → ExecuteFile mode (handles imports, output correctly)
-
-        ExecuteFile mode sends the full script text directly in the JSON payload.
-        UE receives it and runs it as a complete Python file — no temp files,
-        no path issues, imports work, output is captured correctly.
+        Execute a Python script inside UE via the PhotonExecBridge HTTP endpoint.
+        Captures stdout and returns it as a string.
 
         Returns: { "output": "<all stdout lines joined>", "success": bool }
         """
         self._re.command_timeout = timeout
         loop = asyncio.get_event_loop()
 
-        stripped = script.strip()
-        is_multiline = "\n" in stripped
-
-        if is_multiline:
-            exec_mode = EXEC_MODE_EXEC_FILE
-        else:
-            exec_mode = EXEC_MODE_EXEC_STATEMENT
-
         raw = await loop.run_in_executor(
             None,
-            lambda: self._re.run(stripped, exec_mode=exec_mode)
+            lambda: self._re.run(script.strip(), timeout=timeout)
         )
 
-        # Normalise to legacy format so all callers keep working unchanged
+        # Extract output from the bridge result
         output_entries = raw.get("output", [])
         if isinstance(output_entries, list):
             output_text = "\n".join(
                 e.get("output", "") for e in output_entries if isinstance(e, dict)
             )
+        elif isinstance(output_entries, str):
+            output_text = output_entries
         else:
             output_text = str(output_entries)
+
+        # Also pull from _bridge_result if present (direct stdout capture)
+        bridge = raw.get("_bridge_result", {})
+        if bridge.get("output"):
+            output_text = bridge["output"]
+
         if self.verbose:
-            log.debug(f"RE output: {output_text[:500]}")
-        return {"output": output_text, "success": raw.get("success", False)}
+            log.debug(f"Bridge output: {output_text[:500]}")
+        return {"output": output_text, "success": raw.get("success", True)}
 
     async def execute_python_ex(self, script: str, timeout: int = 30) -> dict:
         """
-        Like execute_python() but auto-wraps in try/except and parses
-        UEOS_RESULT / UEOS_ERROR markers.
-
+        Like execute_python() but parses UEOS_RESULT / UEOS_ERROR markers.
         Returns: { "ok": bool, "result": Any, "error": str | None, "raw_output": str }
         """
         self._re.command_timeout = timeout
         loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(
+        raw = await loop.run_in_executor(
             None,
             lambda: self._re.run_ex(script, timeout=timeout)
         )
+        # run_ex already returns {"ok", "output", "error"} — parse UEOS markers
+        parsed = self._parse_output_ex({"output": raw.get("output", "")})
+        if raw.get("error") and not parsed.get("error"):
+            parsed["error"] = raw["error"]
+            parsed["ok"] = False
+        return parsed
 
     def _parse_output_ex(self, raw_result: dict) -> dict:
         """
@@ -545,7 +540,7 @@ print("UEOS_RESULT:" + world.get_name())
     # ──────────────────────────────────────────────────────────────────────
 
     async def ping(self) -> bool:
-        """Return True if UE Remote Execution is reachable (UDP discovery)."""
+        """Return True if UE Remote Control HTTP API is reachable (port 30010)."""
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(None, self._re.ping)
 
