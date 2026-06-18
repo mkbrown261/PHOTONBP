@@ -1,42 +1,36 @@
 # PhotonBP end-to-end test.
 # Run from Windows PowerShell:
-#   python C:/Users/AVIAT/Downloads/PHOTONBP-main/test_photon.py
+#   cd C:/Users/AVIAT/Downloads/PHOTONBP-main
+#   python test_photon.py
 
 import sys
+import os
 import json
 
-import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'mcp_server'))
 
-from remote_control.remote_execution import RemoteExecution
+from remote_control.remote_execution import UnrealRemoteExecution
 
-# ── connect ──────────────────────────────────────────────────────────────────
-re = RemoteExecution()
-re.start()
+# ── connect ───────────────────────────────────────────────────────────────────
+ue = UnrealRemoteExecution()
 
-if not re.remote_nodes:
-    print("ERROR: No UE instance found. Make sure Unreal Editor is open.")
-    re.stop()
+if not ue.ping():
+    print("ERROR: No UE instance found.")
+    print("Make sure Unreal Editor is open with the project loaded.")
     sys.exit(1)
 
-re.open_command_connection(re.remote_nodes[0].node_id)
-print(f"Connected to: {re.remote_nodes[0].node_id}\n")
+print("Connected to UE!\n")
 
-# ── helper ───────────────────────────────────────────────────────────────────
-PASS = 0
-FAIL = 0
-
+# ── helper ────────────────────────────────────────────────────────────────────
 def run(label, script):
-    global PASS, FAIL
     print(f"=== {label} ===")
-    result = re.run_command(script, unattended=True)
+    result = ue.run_ex(script)
     output = result.get('output', '')
-    lines = [l.strip() for l in output.replace('\r', '').split('\n') if l.strip()]
-    for line in lines:
-        print("  ", line)
-    ok = result.get('success', False) and not any('Error' in l or 'error' in l for l in lines if not l.startswith('LogPython'))
-    status = "PASS" if lines else "WARN (no output)"
-    print(f"  -> {status}\n")
+    for line in output.replace('\r', '').split('\n'):
+        line = line.strip()
+        if line:
+            print("  ", line)
+    print()
     return output
 
 # ── 1. Create Blueprint ───────────────────────────────────────────────────────
@@ -101,7 +95,7 @@ print("add_variable_get_node Health guid =>", guid if guid else "FAILED (empty)"
 """)
 
 # ── 8. Inspect graph ──────────────────────────────────────────────────────────
-graph_output = run("8. get_graph_nodes", """
+run("8. get_graph_nodes", """
 import unreal, json
 bp = unreal.EditorAssetLibrary.load_asset('/Game/PhotonTest/BP_PhotonTest')
 raw = unreal.PhotonBPLibrary.get_graph_nodes(bp, 'EventGraph')
@@ -155,10 +149,6 @@ unreal.BlueprintEditorLibrary.compile_blueprint(bp)
 saved = unreal.EditorAssetLibrary.save_asset('/Game/PhotonTest/BP_PhotonTest')
 print("Compile + Save =>", saved)
 """)
-
-# ── disconnect ────────────────────────────────────────────────────────────────
-re.close_command_connection()
-re.stop()
 
 print("=" * 60)
 print("DONE — open /Game/PhotonTest/BP_PhotonTest in UE to verify")
