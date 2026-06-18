@@ -41,7 +41,7 @@ log = logging.getLogger("ueos.remote_exec")
 # ── Protocol constants ─────────────────────────────────────────────────────────
 MULTICAST_GROUP_IP   = "239.0.0.1"
 MULTICAST_GROUP_PORT = 6766
-MULTICAST_BIND_ADDR  = "127.0.0.1"   # upyrc default; UE default is 0.0.0.0
+MULTICAST_BIND_ADDR  = "0.0.0.0"     # must match UE default
 IP_MULTICAST_TTL     = 0             # 0 = local machine only
 SOCKET_TIMEOUT       = 0.5           # seconds (matches upyrc)
 BUFFER_SIZE          = 2_097_152     # 2 MB (matches upyrc)
@@ -94,7 +94,7 @@ def _open_multicast_socket(bind_addr: str, group_ip: str, group_port: int, ttl: 
     s.bind((bind_addr, group_port))
     membership_request = (
         socket.inet_aton(group_ip) +
-        socket.inet_aton(bind_addr)   # ← NOT INADDR_ANY
+        socket.inet_aton("0.0.0.0")   # INADDR_ANY for multicast join
     )
     s.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, membership_request)
     s.settimeout(SOCKET_TIMEOUT)
