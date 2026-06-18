@@ -296,28 +296,47 @@ class UnrealRemoteControl:
     async def get_engine_info(self) -> dict:
         """Get UE 5.4 version, project name, and paths."""
         script = """
-import unreal, json
+import unreal, json, os
+
+def _proj_name_from_dir(proj_dir):
+    \"\"\"Walk up from project dir to find the .uproject filename — most reliable.\"\"\"
+    try:
+        d = proj_dir.replace("\\\\", "/").rstrip("/")
+        for fname in os.listdir(d):
+            if fname.endswith(".uproject"):
+                return fname.replace(".uproject", "")
+    except Exception:
+        pass
+    return None
+
 try:
+    proj_dir  = unreal.Paths.project_dir()
     proj_file = unreal.Paths.get_project_file_path().replace("\\\\", "/")
-    proj_name = proj_file.split("/")[-1].replace(".uproject", "")
+
+    # Primary: scan project dir for .uproject file — immune to UE's stale default
+    proj_name = _proj_name_from_dir(proj_dir)
+    # Fallback: parse from the file path string
+    if not proj_name:
+        proj_name = proj_file.split("/")[-1].replace(".uproject", "")
+
     info = {
         "engineVersion": str(unreal.SystemLibrary.get_engine_version()),
         "projectName":   proj_name,
         "projectFile":   proj_file,
-        "projectDir":    unreal.Paths.project_dir(),
+        "projectDir":    proj_dir,
         "contentDir":    unreal.Paths.project_content_dir(),
         "platform":      str(unreal.SystemLibrary.get_platform_name()),
     }
     print("UEOS_INFO:" + json.dumps(info))
 except Exception as _e1:
     try:
-        proj_file = unreal.Paths.get_project_file_path().replace("\\\\", "/")
-        proj_name = proj_file.split("/")[-1].replace(".uproject", "")
+        proj_dir  = unreal.Paths.project_dir()
+        proj_name = _proj_name_from_dir(proj_dir) or proj_dir.rstrip("/").split("/")[-1]
         info = {
             "engineVersion": "unknown",
             "projectName":   proj_name,
-            "projectFile":   proj_file,
-            "projectDir":    unreal.Paths.project_dir(),
+            "projectFile":   unreal.Paths.get_project_file_path(),
+            "projectDir":    proj_dir,
             "contentDir":    unreal.Paths.project_content_dir(),
             "platform":      "unknown",
         }
