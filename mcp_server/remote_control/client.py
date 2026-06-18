@@ -208,6 +208,24 @@ class UnrealRemoteControl:
         if bridge.get("output"):
             output_text = bridge["output"]
 
+        # ── Hard output cap ───────────────────────────────────────────────────
+        # UE's HTTP server has a ~64KB response body limit. Large outputs (e.g.
+        # get_graph_nodes on a complex Blueprint) cause HTTP 400. Cap at 8000
+        # chars — scripts should use the slim/truncated path before printing.
+        # UEOS_RESULT: lines are preserved; only excess tail is dropped.
+        MAX_OUTPUT = 8000
+        if len(output_text) > MAX_OUTPUT:
+            # Try to keep the UEOS_RESULT line if it's present
+            result_line = ""
+            for line in output_text.split("\n"):
+                if line.startswith("UEOS_RESULT:") or line.startswith("UEOS_ERROR:"):
+                    result_line = line
+                    break
+            if result_line:
+                output_text = result_line
+            else:
+                output_text = output_text[:MAX_OUTPUT] + "\n[TRUNCATED — output exceeded 8000 chars]"
+
         if self.verbose:
             log.debug(f"Bridge output: {output_text[:500]}")
         return {"output": output_text, "success": raw.get("success", True)}
