@@ -404,9 +404,9 @@ class DataTools:
     def _err(self, msg: str) -> list[types.TextContent]:
         return [types.TextContent(type="text", text=json.dumps({"error": msg}))]
 
-    async def _exec(self, script: str) -> dict:
+    async def _exec(self, script: str, timeout: int = 60) -> dict:
         """Run script in UE and return parsed result dict."""
-        result = await self.ue.execute_python(dedent(script))
+        result = await self.ue.execute_python(dedent(script), timeout=timeout)
         output = result.get("output", "")
         for line in output.split("\n"):
             line = line.strip()
@@ -430,6 +430,7 @@ class DataTools:
         name        = args["name"]
         path        = args["path"].rstrip("/")
         fields      = args.get("fields", [])
+        asset_path  = f"{path}/{name}"
 
         # Build field-addition code block
         field_code_lines = []
@@ -455,24 +456,44 @@ def _add_field(struct, fname, cat, sub, tooltip=""):
             pin_type.pin_sub_category_object = sub_obj
     unreal.StructureEditorUtils.add_variable(struct, pin_type, fname)
 
-asset_tools = unreal.AssetToolsHelpers.get_asset_tools()
-factory = unreal.StructureFactory()
-struct = asset_tools.create_asset("{name}", "{path}", unreal.UserDefinedStruct, factory)
+asset_path = "{asset_path}"
 
-if struct is None:
-    print("UEOS_ERROR:Failed to create struct {name} at {path}")
+# ── CRITICAL: check existence FIRST to avoid UE modal dialog ──────────────
+# If the asset already exists, load and return it — never call create_asset
+# on an existing path or UE will freeze with a "replace existing?" modal.
+if unreal.EditorAssetLibrary.does_asset_exist(asset_path):
+    struct = unreal.EditorAssetLibrary.load_asset(asset_path)
+    if struct and isinstance(struct, unreal.UserDefinedStruct):
+        info = {{
+            "status": "already_exists",
+            "name":   "{name}",
+            "path":   struct.get_path_name(),
+            "fields": {len(fields)}
+        }}
+        print("UEOS_RESULT:" + json.dumps(info))
+    else:
+        print("UEOS_ERROR:Asset exists at {asset_path} but is not a UserDefinedStruct")
 else:
+    # Make sure the directory exists before creating
+    unreal.EditorAssetLibrary.make_directory("{path}")
+    asset_tools = unreal.AssetToolsHelpers.get_asset_tools()
+    factory = unreal.StructureFactory()
+    struct = asset_tools.create_asset("{name}", "{path}", unreal.UserDefinedStruct, factory)
+    if struct is None:
+        print("UEOS_ERROR:Failed to create struct {name} at {path}")
+    else:
 {field_code}
-    unreal.EditorAssetLibrary.save_asset(struct.get_path_name(), only_if_is_dirty=False)
-    info = {{
-        "status": "created",
-        "name":   "{name}",
-        "path":   struct.get_path_name(),
-        "fields": {len(fields)}
-    }}
-    print("UEOS_RESULT:" + json.dumps(info))
+        unreal.EditorAssetLibrary.save_asset(struct.get_path_name(), only_if_is_dirty=False)
+        info = {{
+            "status": "created",
+            "name":   "{name}",
+            "path":   struct.get_path_name(),
+            "fields": {len(fields)}
+        }}
+        print("UEOS_RESULT:" + json.dumps(info))
 """
-        result = await self._exec(script)
+        # Struct creation can be slow — use 90s timeout to avoid premature timeout
+        result = await self._exec(script, timeout=90)
         return self._ok(result)
 
     async def _add_struct_field(self, args: dict) -> list[types.TextContent]:
@@ -537,22 +558,32 @@ else:
             value_lines.append(f'    unreal.UserDefinedEnumEditorUtils.set_enum_entry_display_name(enum_asset, unreal.UserDefinedEnumEditorUtils.add_enum_entry(enum_asset), "{v}")')
         value_code = "\n".join(value_lines) if value_lines else "    pass"
 
+        asset_path = f"{path}/{name}"
         script = f"""
 import unreal, json
 
-asset_tools = unreal.AssetToolsHelpers.get_asset_tools()
-factory = unreal.EnumerationFactory()
-enum_asset = asset_tools.create_asset("{name}", "{path}", unreal.UserDefinedEnum, factory)
-
-if enum_asset is None:
-    print("UEOS_ERROR:Failed to create enum {name} at {path}")
+asset_path = "{asset_path}"
+if unreal.EditorAssetLibrary.does_asset_exist(asset_path):
+    enum_asset = unreal.EditorAssetLibrary.load_asset(asset_path)
+    if enum_asset and isinstance(enum_asset, unreal.UserDefinedEnum):
+        num_vals = enum_asset.num_enums() - 1
+        print("UEOS_RESULT:" + json.dumps({{"status":"already_exists","name":"{name}","path":enum_asset.get_path_name(),"value_count":num_vals}}))
+    else:
+        print("UEOS_ERROR:Asset exists at {asset_path} but is not a UserDefinedEnum")
 else:
+    unreal.EditorAssetLibrary.make_directory("{path}")
+    asset_tools = unreal.AssetToolsHelpers.get_asset_tools()
+    factory = unreal.EnumerationFactory()
+    enum_asset = asset_tools.create_asset("{name}", "{path}", unreal.UserDefinedEnum, factory)
+    if enum_asset is None:
+        print("UEOS_ERROR:Failed to create enum {name} at {path}")
+    else:
 {value_code}
-    unreal.EditorAssetLibrary.save_asset(enum_asset.get_path_name(), only_if_is_dirty=False)
-    num_vals = enum_asset.num_enums() - 1  # subtract MAX
-    print("UEOS_RESULT:" + json.dumps({{"status":"created","name":"{name}","path":enum_asset.get_path_name(),"value_count":num_vals}}))
+        unreal.EditorAssetLibrary.save_asset(enum_asset.get_path_name(), only_if_is_dirty=False)
+        num_vals = enum_asset.num_enums() - 1  # subtract MAX
+        print("UEOS_RESULT:" + json.dumps({{"status":"created","name":"{name}","path":enum_asset.get_path_name(),"value_count":num_vals}}))
 """
-        return self._ok(await self._exec(script))
+        return self._ok(await self._exec(script, timeout=90))
 
     async def _add_enum_value(self, args: dict) -> list[types.TextContent]:
         enum_path  = args["enum_path"]
@@ -600,32 +631,39 @@ else:
         path        = args["path"].rstrip("/")
         struct_path = args["struct_path"]
 
+        asset_path = f"{path}/{name}"
         script = f"""
 import unreal, json
 
-# Load row struct
-struct = unreal.load_object(None, "{struct_path}")
-if struct is None:
-    print("UEOS_ERROR:Row struct not found: {struct_path}")
-else:
-    factory = unreal.DataTableFactory()
-    factory.struct = struct
-
-    asset_tools = unreal.AssetToolsHelpers.get_asset_tools()
-    table = asset_tools.create_asset("{name}", "{path}", unreal.DataTable, factory)
-
-    if table is None:
-        print("UEOS_ERROR:Failed to create DataTable {name} at {path}")
+asset_path = "{asset_path}"
+if unreal.EditorAssetLibrary.does_asset_exist(asset_path):
+    table = unreal.EditorAssetLibrary.load_asset(asset_path)
+    if table and isinstance(table, unreal.DataTable):
+        print("UEOS_RESULT:" + json.dumps({{"status":"already_exists","name":"{name}","path":table.get_path_name(),"struct":"{struct_path}"  }}))
     else:
-        unreal.EditorAssetLibrary.save_asset(table.get_path_name(), only_if_is_dirty=False)
-        print("UEOS_RESULT:" + json.dumps({{
-            "status": "created",
-            "name":   "{name}",
-            "path":   table.get_path_name(),
-            "struct": "{struct_path}"
-        }}))
+        print("UEOS_ERROR:Asset exists at {asset_path} but is not a DataTable")
+else:
+    struct = unreal.load_object(None, "{struct_path}")
+    if struct is None:
+        print("UEOS_ERROR:Row struct not found: {struct_path}")
+    else:
+        unreal.EditorAssetLibrary.make_directory("{path}")
+        factory = unreal.DataTableFactory()
+        factory.struct = struct
+        asset_tools = unreal.AssetToolsHelpers.get_asset_tools()
+        table = asset_tools.create_asset("{name}", "{path}", unreal.DataTable, factory)
+        if table is None:
+            print("UEOS_ERROR:Failed to create DataTable {name} at {path}")
+        else:
+            unreal.EditorAssetLibrary.save_asset(table.get_path_name(), only_if_is_dirty=False)
+            print("UEOS_RESULT:" + json.dumps({{
+                "status": "created",
+                "name":   "{name}",
+                "path":   table.get_path_name(),
+                "struct": "{struct_path}"
+            }}))
 """
-        return self._ok(await self._exec(script))
+        return self._ok(await self._exec(script, timeout=90))
 
     async def _add_row(self, args: dict) -> list[types.TextContent]:
         table_path = args["table_path"]
