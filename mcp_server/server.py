@@ -706,17 +706,20 @@ async def handle_diagnose() -> list[types.TextContent]:  # noqa: C901
     info("PhotonBPLibrary provides 14 direct Blueprint-editing functions via HTTP")
     info("Object: /Script/PhotonBP.Default__PhotonBPLibrary")
     info("Not required for basic Python execution — bonus capability check")
+    info("Probe: GET /remote/object/describe (no parameters needed — just checks registration)")
     if http_ok:
-        payload_photon = {
-            "objectPath":         "/Script/PhotonBP.Default__PhotonBPLibrary",
-            "functionName":       "GetBlueprintCount",
-            "parameters":         {},
-            "generateTransaction": False
-        }
         try:
             timeout_http = aiohttp.ClientTimeout(total=8, connect=4)
             async with aiohttp.ClientSession(timeout=timeout_http) as s:
-                async with s.put(f"{base}/remote/object/call", json=payload_photon) as resp:
+                # Use describe endpoint — reads object metadata without calling any function.
+                # All PhotonBPLibrary functions require a Blueprint* param so we cannot
+                # call them with empty args. describe returns 200 if the object is registered,
+                # 404 if the plugin is not loaded.
+                describe_url = f"{base}/remote/object/describe"
+                async with s.put(
+                    describe_url,
+                    json={"objectPath": "/Script/PhotonBP.Default__PhotonBPLibrary"}
+                ) as resp:
                     photon_body = await resp.text()
                     raw("Status", str(resp.status))
                     raw("Body",   photon_body[:300])
