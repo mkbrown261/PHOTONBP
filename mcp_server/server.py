@@ -151,6 +151,48 @@ scene_tools      = SceneTools(ue)
 
 server = Server("ueos")
 
+# ── System Prompt (MCP Prompts API) ──────────────────────────────────────────
+
+_PROMPT_FILE = Path(__file__).parent.parent / "UEOS_SYSTEM_PROMPT.md"
+
+def _load_system_prompt() -> str:
+    try:
+        return _PROMPT_FILE.read_text(encoding="utf-8")
+    except Exception as e:
+        return f"UEOS system prompt unavailable: {e}"
+
+
+@server.list_prompts()
+async def list_prompts() -> list[types.Prompt]:
+    return [
+        types.Prompt(
+            name="ueos",
+            description=(
+                "UEOS — Unreal Engine Operating System. "
+                "Full system prompt: architecture doctrine, optimization rules, "
+                "animation notifies, debugging system, game design thinking, "
+                "and Blueprint standards for UE 5.4."
+            ),
+            arguments=[],
+        )
+    ]
+
+
+@server.get_prompt()
+async def get_prompt(name: str, arguments: dict | None = None) -> types.GetPromptResult:
+    if name != "ueos":
+        raise ValueError(f"Unknown prompt: {name}")
+    content = _load_system_prompt()
+    return types.GetPromptResult(
+        description="UEOS — Unreal Engine Operating System v2.0",
+        messages=[
+            types.PromptMessage(
+                role="user",
+                content=types.TextContent(type="text", text=content),
+            )
+        ],
+    )
+
 
 @server.list_tools()
 async def list_tools() -> list[types.Tool]:
