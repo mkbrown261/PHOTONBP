@@ -41,10 +41,42 @@ if "error" in r:
     sys.exit(1)
 print("  OK - HTTP API is alive\n")
 
-# ── 2. Test basic Python execution ────────────────────────────────────────────
-print("=== 2. Basic Python execution ===")
-r = run_py("import unreal; unreal.log('PHOTON_PING_OK')")
-print("  response:", json.dumps(r, indent=2))
+# ── 2. Find the correct Python plugin object path ─────────────────────────────
+print("=== 2. Find Python plugin object path ===")
+candidates = [
+    "/Engine/PythonScriptPlugin.Default__PythonScriptPlugin",
+    "/Script/PythonScriptPlugin.Default__PythonScriptPlugin",
+    "/Engine/PythonScriptPlugin.PythonScriptPlugin",
+    "/Script/PythonScriptPlugin.PythonScriptPlugin",
+    "/Script/PythonScriptPlugin.Default__PythonScriptPlugin_0",
+    "/Engine/Transient.PythonScriptPlugin_0",
+    "/Engine/Transient.Default__PythonScriptPlugin",
+]
+found_path = None
+for path in candidates:
+    r = http("/remote/object/call", {
+        "objectPath": path,
+        "functionName": "ExecutePythonScript",
+        "parameters": {"PythonScript": "import unreal; unreal.log('TEST_OK')"},
+        "generateTransaction": False
+    })
+    if "error" not in r:
+        print(f"  WORKS: {path}")
+        found_path = path
+        break
+    else:
+        body = r.get('body', '')
+        print(f"  FAIL: {path}")
+        print(f"        {body[:100]}")
+
+# Also try searching assets for any Python-related object
+print()
+print("  Searching for Python objects via asset search...")
+r2 = http("/remote/search/assets", {
+    "Query": "Python",
+    "Filter": {"ClassNames": [], "PackagePaths": ["/Engine"], "RecursivePaths": True}
+})
+print("  Search result:", json.dumps(r2, indent=2)[:500])
 print()
 
 # ── 3. Check PhotonBPLibrary is loaded ────────────────────────────────────────
