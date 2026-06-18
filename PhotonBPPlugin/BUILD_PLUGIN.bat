@@ -71,7 +71,7 @@ echo Building PhotonBP plugin...
 echo This takes 1-3 minutes. Do not close this window.
 echo.
 
-%UBT% UnrealEditor Win64 Development -Project="%PROJECT_FILE%" -Plugin="%PLUGIN_DEST%\PhotonBP.uplugin" -Package="%~dp0Output\PhotonBP" -Rocket
+"%UE_ROOT%\Engine\Build\BatchFiles\RunUAT.bat" BuildPlugin -Plugin="%PLUGIN_DEST%\PhotonBP.uplugin" -Package="%~dp0Output\PhotonBP" -Rocket -TargetPlatforms=Win64
 
 if %ERRORLEVEL% NEQ 0 (
     echo.
