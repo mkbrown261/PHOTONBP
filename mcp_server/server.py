@@ -890,10 +890,11 @@ async def handle_status() -> list[types.TextContent]:
     try:
         info = await ue.get_engine_info()
         status["unreal_engine"].update({
-            "connected": True,
-            "version": info.get("engineVersion", "?"),
-            "project": info.get("projectName", "?"),
-            "content_dir": info.get("contentDir", "?")
+            "connected":   True,
+            "version":     info.get("engineVersion", "?"),
+            "project":     info.get("projectName", "?"),
+            "content_dir": info.get("contentDir", "?"),
+            "_debug":      info.get("_debug", {}),
         })
     except Exception as e:
         status["unreal_engine"]["error"] = str(e)
