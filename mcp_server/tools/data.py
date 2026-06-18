@@ -988,47 +988,76 @@ else:
         class_path  = args.get("class_path", "/Script/Engine.PrimaryDataAsset")
         properties  = args.get("properties", {})
         props_json  = json.dumps(properties)
+        asset_path  = f"{path}/{name}"
+
+        # ── Class path validation ──────────────────────────────────────────
+        # DataAsset (/Script/Engine.DataAsset) is abstract — UE shows a modal
+        # dialog and refuses to create it. Always use PrimaryDataAsset or a
+        # concrete subclass. Catch the mistake here before it hits UE.
+        ABSTRACT_CLASSES = {
+            "/Script/Engine.DataAsset",
+            "DataAsset",
+        }
+        if class_path in ABSTRACT_CLASSES:
+            class_path = "/Script/Engine.PrimaryDataAsset"
 
         script = f"""
 import unreal, json
 
+asset_path = "{asset_path}"
 class_path = "{class_path}"
-asset_class = unreal.load_class(None, class_path)
-if asset_class is None:
-    print("UEOS_ERROR:Class not found: " + class_path)
-else:
-    asset_tools = unreal.AssetToolsHelpers.get_asset_tools()
-    factory = unreal.DataAssetFactory()
-    factory.data_asset_class = asset_class
 
-    asset = asset_tools.create_asset("{name}", "{path}", unreal.DataAsset, factory)
-    if asset is None:
-        print("UEOS_ERROR:Failed to create DataAsset {name} at {path}")
-    else:
-        # Apply initial properties
-        props = json.loads('{props_json}')
-        for prop_name, prop_val in props.items():
-            try:
-                if isinstance(prop_val, bool):
-                    setattr(asset, prop_name, prop_val)
-                elif isinstance(prop_val, (int, float, str)):
-                    setattr(asset, prop_name, prop_val)
-                elif isinstance(prop_val, list) and len(prop_val) == 3:
-                    # Assume vector
-                    setattr(asset, prop_name, unreal.Vector(prop_val[0], prop_val[1], prop_val[2]))
-                elif isinstance(prop_val, list) and len(prop_val) == 4:
-                    # Assume LinearColor
-                    setattr(asset, prop_name, unreal.LinearColor(prop_val[0], prop_val[1], prop_val[2], prop_val[3]))
-            except Exception as e:
-                pass  # Best-effort
-
-        unreal.EditorAssetLibrary.save_asset(asset.get_path_name(), only_if_is_dirty=False)
+# ── Existence check — avoid modal dialog on duplicate ─────────────────────
+if unreal.EditorAssetLibrary.does_asset_exist(asset_path):
+    asset = unreal.EditorAssetLibrary.load_asset(asset_path)
+    if asset:
         print("UEOS_RESULT:" + json.dumps({{
-            "status": "created",
-            "name": "{name}",
-            "path": asset.get_path_name(),
-            "class": class_path,
-            "properties_set": list(props.keys())
+            "status":  "already_exists",
+            "name":    "{name}",
+            "path":    asset.get_path_name(),
+            "class":   class_path,
         }}))
+    else:
+        print("UEOS_ERROR:Asset exists at {asset_path} but could not be loaded")
+else:
+    asset_class = unreal.load_class(None, class_path)
+    if asset_class is None:
+        print("UEOS_ERROR:Class not found: " + class_path +
+              ". Use a concrete subclass e.g. /Script/Engine.PrimaryDataAsset "
+              "or a Blueprint DataAsset subclass path like /Game/Data/DA_MyClass.DA_MyClass_C")
+    elif asset_class.is_abstract():
+        print("UEOS_ERROR:Class " + class_path + " is abstract — UE cannot create assets from "
+              "abstract classes. Use /Script/Engine.PrimaryDataAsset or create a Blueprint "
+              "subclass of DataAsset first, then pass its path here.")
+    else:
+        unreal.EditorAssetLibrary.make_directory("{path}")
+        asset_tools = unreal.AssetToolsHelpers.get_asset_tools()
+        factory = unreal.DataAssetFactory()
+        factory.data_asset_class = asset_class
+        asset = asset_tools.create_asset("{name}", "{path}", None, factory)
+        if asset is None:
+            print("UEOS_ERROR:Failed to create DataAsset {name} at {path}")
+        else:
+            props = json.loads('{props_json}')
+            for prop_name, prop_val in props.items():
+                try:
+                    if isinstance(prop_val, bool):
+                        setattr(asset, prop_name, prop_val)
+                    elif isinstance(prop_val, (int, float, str)):
+                        setattr(asset, prop_name, prop_val)
+                    elif isinstance(prop_val, list) and len(prop_val) == 3:
+                        setattr(asset, prop_name, unreal.Vector(prop_val[0], prop_val[1], prop_val[2]))
+                    elif isinstance(prop_val, list) and len(prop_val) == 4:
+                        setattr(asset, prop_name, unreal.LinearColor(prop_val[0], prop_val[1], prop_val[2], prop_val[3]))
+                except Exception:
+                    pass
+            unreal.EditorAssetLibrary.save_asset(asset.get_path_name(), only_if_is_dirty=False)
+            print("UEOS_RESULT:" + json.dumps({{
+                "status":          "created",
+                "name":            "{name}",
+                "path":            asset.get_path_name(),
+                "class":           class_path,
+                "properties_set":  list(props.keys()),
+            }}))
 """
-        return self._ok(await self._exec(script))
+        return self._ok(await self._exec(script, timeout=90))
