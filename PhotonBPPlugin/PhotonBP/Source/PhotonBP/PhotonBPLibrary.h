@@ -13,16 +13,9 @@ class UPhotonBPLibrary : public UBlueprintFunctionLibrary
 
 public:
 
-	/**
-	 * Add a member variable to a Blueprint.
-	 * @param Blueprint		The Blueprint asset to modify
-	 * @param VarName		Name of the new variable
-	 * @param PinCategory	"bool", "int", "int64", "real", "string", "name", "text", "object", "struct"
-	 * @param PinSubCategory	For "real": "float" or "double". Otherwise empty.
-	 * @param PinSubCategoryObjectPath	For object/struct: full path e.g. "/Script/Engine.Actor"
-	 * @return True if the variable was added successfully
-	 */
-	UFUNCTION(BlueprintCallable, Category = "PhotonBP")
+	// ── Variable Creation ────────────────────────────────────────────────────
+
+	UFUNCTION(BlueprintCallable, Category = "PhotonBP|Variables")
 	static bool AddMemberVariable(
 		UBlueprint* Blueprint,
 		FName VarName,
@@ -31,42 +24,169 @@ public:
 		FString PinSubCategoryObjectPath
 	);
 
-	/**
-	 * Add an Event Dispatcher to a Blueprint.
-	 * @param Blueprint		The Blueprint asset to modify
-	 * @param DispatcherName	Name of the dispatcher
-	 * @return True if added successfully
-	 */
-	UFUNCTION(BlueprintCallable, Category = "PhotonBP")
+	UFUNCTION(BlueprintCallable, Category = "PhotonBP|Variables")
 	static bool AddEventDispatcher(
 		UBlueprint* Blueprint,
 		FName DispatcherName
 	);
 
-	/**
-	 * Add a Custom Event node to a Blueprint's Event Graph.
-	 * @param Blueprint		The Blueprint asset to modify
-	 * @param EventName		Name of the custom event
-	 * @return True if added successfully
-	 */
-	UFUNCTION(BlueprintCallable, Category = "PhotonBP")
-	static bool AddCustomEvent(
-		UBlueprint* Blueprint,
-		FName EventName
-	);
-
-	/**
-	 * Set a variable's instance editable and expose on spawn flags.
-	 * @param Blueprint		The Blueprint asset
-	 * @param VarName		Variable name
-	 * @param bInstanceEditable		Show in Details panel
-	 * @param bExposeOnSpawn		Show on spawn node
-	 */
-	UFUNCTION(BlueprintCallable, Category = "PhotonBP")
+	UFUNCTION(BlueprintCallable, Category = "PhotonBP|Variables")
 	static bool SetVariableFlags(
 		UBlueprint* Blueprint,
 		FName VarName,
 		bool bInstanceEditable,
 		bool bExposeOnSpawn
+	);
+
+	// ── Node Creation ────────────────────────────────────────────────────────
+
+	/**
+	 * Add a Custom Event node to the EventGraph.
+	 * Returns the node GUID string for use in ConnectPins.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "PhotonBP|Nodes")
+	static FString AddCustomEvent(
+		UBlueprint* Blueprint,
+		FName EventName,
+		int32 NodeX,
+		int32 NodeY
+	);
+
+	/**
+	 * Add a standard event node (e.g. ReceiveBeginPlay, ReceiveTick).
+	 * Returns node GUID string.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "PhotonBP|Nodes")
+	static FString AddEventNode(
+		UBlueprint* Blueprint,
+		FString GraphName,
+		FString EventFunctionName,
+		int32 NodeX,
+		int32 NodeY
+	);
+
+	/**
+	 * Add a function call node.
+	 * @param ClassName		e.g. "KismetSystemLibrary"
+	 * @param FunctionName	e.g. "PrintString"
+	 * Returns node GUID string.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "PhotonBP|Nodes")
+	static FString AddFunctionCallNode(
+		UBlueprint* Blueprint,
+		FString GraphName,
+		FString ClassName,
+		FString FunctionName,
+		int32 NodeX,
+		int32 NodeY
+	);
+
+	/**
+	 * Add a variable GET node.
+	 * Returns node GUID string.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "PhotonBP|Nodes")
+	static FString AddVariableGetNode(
+		UBlueprint* Blueprint,
+		FString GraphName,
+		FName VarName,
+		int32 NodeX,
+		int32 NodeY
+	);
+
+	/**
+	 * Add a variable SET node.
+	 * Returns node GUID string.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "PhotonBP|Nodes")
+	static FString AddVariableSetNode(
+		UBlueprint* Blueprint,
+		FString GraphName,
+		FName VarName,
+		int32 NodeX,
+		int32 NodeY
+	);
+
+	/**
+	 * Add a Branch (if/then/else) node.
+	 * Returns node GUID string.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "PhotonBP|Nodes")
+	static FString AddBranchNode(
+		UBlueprint* Blueprint,
+		FString GraphName,
+		int32 NodeX,
+		int32 NodeY
+	);
+
+	/**
+	 * Add a Sequence node.
+	 * Returns node GUID string.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "PhotonBP|Nodes")
+	static FString AddSequenceNode(
+		UBlueprint* Blueprint,
+		FString GraphName,
+		int32 NodeX,
+		int32 NodeY
+	);
+
+	/**
+	 * Add a Cast node.
+	 * @param TargetClassName	e.g. "ACharacter"
+	 * Returns node GUID string.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "PhotonBP|Nodes")
+	static FString AddCastNode(
+		UBlueprint* Blueprint,
+		FString GraphName,
+		FString TargetClassName,
+		int32 NodeX,
+		int32 NodeY
+	);
+
+	// ── Pin Connection ───────────────────────────────────────────────────────
+
+	/**
+	 * Connect two pins between nodes in a graph.
+	 * @param FromNodeGuid	GUID string returned from Add*Node
+	 * @param FromPinName	e.g. "then", "ReturnValue", "Value"
+	 * @param ToNodeGuid	GUID string returned from Add*Node
+	 * @param ToPinName		e.g. "execute", "Condition", "NewValue"
+	 * @return True if connection succeeded
+	 */
+	UFUNCTION(BlueprintCallable, Category = "PhotonBP|Pins")
+	static bool ConnectPins(
+		UBlueprint* Blueprint,
+		FString GraphName,
+		FString FromNodeGuid,
+		FString FromPinName,
+		FString ToNodeGuid,
+		FString ToPinName
+	);
+
+	/**
+	 * Set a literal value on a pin (for input pins with no connection).
+	 * @param NodeGuid		GUID of the node
+	 * @param PinName		Name of the pin
+	 * @param Value			String representation of the value
+	 */
+	UFUNCTION(BlueprintCallable, Category = "PhotonBP|Pins")
+	static bool SetPinDefaultValue(
+		UBlueprint* Blueprint,
+		FString GraphName,
+		FString NodeGuid,
+		FString PinName,
+		FString Value
+	);
+
+	/**
+	 * Get all node GUIDs and their types in a graph.
+	 * Returns JSON string: [{"guid":"...","type":"...","name":"..."}]
+	 */
+	UFUNCTION(BlueprintCallable, Category = "PhotonBP|Nodes")
+	static FString GetGraphNodes(
+		UBlueprint* Blueprint,
+		FString GraphName
 	);
 };

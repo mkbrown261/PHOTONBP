@@ -368,6 +368,40 @@ circular dependencies, missing parent class, empty functions.""",
             ),
 
             types.Tool(
+                name="blueprint_get_graph_nodes",
+                description="""Inspect all nodes in a Blueprint graph.
+Returns a JSON list with each node's GUID, type, title, and all pin names/directions.
+Use this BEFORE connecting pins to find the correct GUID and pin names.
+Always call this after blueprint_add_node to get the node_id for connections.""",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "blueprint_path": {"type": "string", "description": "Full content path to the Blueprint"},
+                        "graph": {"type": "string", "description": "Graph name: EventGraph, or a function graph name", "default": "EventGraph"}
+                    },
+                    "required": ["blueprint_path"]
+                }
+            ),
+
+            types.Tool(
+                name="blueprint_set_pin_value",
+                description="""Set the default/literal value of a pin on a Blueprint node.
+Use for pins that have no incoming connection (e.g. a float literal, string default).
+The node_id is the GUID string returned by blueprint_add_node or blueprint_get_graph_nodes.""",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "blueprint_path": {"type": "string", "description": "Full content path to the Blueprint"},
+                        "graph": {"type": "string", "description": "Graph name", "default": "EventGraph"},
+                        "node_id": {"type": "string", "description": "Node GUID from blueprint_add_node or blueprint_get_graph_nodes"},
+                        "pin_name": {"type": "string", "description": "Pin name e.g. 'PrintString', 'Duration', 'NewValue'"},
+                        "value": {"type": "string", "description": "Value as string e.g. '3.14', 'Hello World', 'true'"}
+                    },
+                    "required": ["blueprint_path", "node_id", "pin_name", "value"]
+                }
+            ),
+
+            types.Tool(
                 name="blueprint_add_timeline",
                 description="""Add a Timeline node to a Blueprint graph.
 Timelines handle interpolated value changes over time.
@@ -420,6 +454,8 @@ Use for: door opening, elevator movement, light flickering, platform movement, c
             "blueprint_add_interface":      self._add_interface,
             "blueprint_add_dispatcher":     self._add_dispatcher,
             "blueprint_set_construction_script": self._set_construction_script,
+            "blueprint_get_graph_nodes":    self._get_graph_nodes,
+            "blueprint_set_pin_value":      self._set_pin_value,
             "blueprint_compile":            self._compile,
             "blueprint_save":               self._save,
             "blueprint_read":               self._read,
@@ -687,24 +723,185 @@ except Exception as e:
         return self._parse_result(result)
 
     async def _add_node(self, args: dict) -> list[types.TextContent]:
-        # Node editing via Python is severely limited in UE 5.4 — BlueprintEditorLibrary
-        # exposes only high-level operations. Return clear info about what's possible.
-        bp_path = args["blueprint_path"]
-        node_type = args.get("node_type", "")
-        return [types.TextContent(type="text", text=json.dumps({
-            "status": "info",
-            "message": (
-                "blueprint_add_node is limited in UE 5.4 Python API. "
-                "Use ueos_run_python with BlueprintEditorLibrary for specific node operations. "
-                f"Requested: {node_type} in {bp_path}"
-            )
-        }, indent=2))]
+        bp_path    = args["blueprint_path"]
+        graph      = args.get("graph", "EventGraph")
+        node_type  = args.get("node_type", "")
+        x          = int(args.get("position_x", 0))
+        y          = int(args.get("position_y", 0))
+
+        # Build the PhotonBPLibrary call depending on node_type
+        if node_type == "custom_event":
+            event_name = args.get("event", args.get("function", "MyCustomEvent"))
+            call = f'unreal.PhotonBPLibrary.add_custom_event(bp, "{event_name}", {x}, {y})'
+
+        elif node_type == "event":
+            event_name = args.get("event", "ReceiveBeginPlay")
+            call = f'unreal.PhotonBPLibrary.add_event_node(bp, "{graph}", "{event_name}", {x}, {y})'
+
+        elif node_type == "function":
+            func   = args.get("function", "")
+            target = args.get("target", "")
+            # target may be a class name (PrintString → KismetSystemLibrary)
+            cls_map = {
+                "PrintString":       "KismetSystemLibrary",
+                "DrawDebugString":   "KismetSystemLibrary",
+                "GetGameInstance":   "GameplayStatics",
+                "GetPlayerPawn":     "GameplayStatics",
+                "GetPlayerController": "GameplayStatics",
+                "SpawnActor":        "GameplayStatics",
+                "SpawnActorFromClass": "GameplayStatics",
+                "ApplyDamage":       "GameplayStatics",
+                "GetAllActorsOfClass": "GameplayStatics",
+            }
+            class_name = args.get("class_name", cls_map.get(func, target or "KismetSystemLibrary"))
+            call = f'unreal.PhotonBPLibrary.add_function_call_node(bp, "{graph}", "{class_name}", "{func}", {x}, {y})'
+
+        elif node_type == "variable_get":
+            var = args.get("variable_name", args.get("function", ""))
+            call = f'unreal.PhotonBPLibrary.add_variable_get_node(bp, "{graph}", "{var}", {x}, {y})'
+
+        elif node_type == "variable_set":
+            var = args.get("variable_name", args.get("function", ""))
+            call = f'unreal.PhotonBPLibrary.add_variable_set_node(bp, "{graph}", "{var}", {x}, {y})'
+
+        elif node_type in ("branch", "if", "if_then_else"):
+            call = f'unreal.PhotonBPLibrary.add_branch_node(bp, "{graph}", {x}, {y})'
+
+        elif node_type == "sequence":
+            call = f'unreal.PhotonBPLibrary.add_sequence_node(bp, "{graph}", {x}, {y})'
+
+        elif node_type == "cast":
+            cls = args.get("class_name", args.get("target", ""))
+            call = f'unreal.PhotonBPLibrary.add_cast_node(bp, "{graph}", "{cls}", {x}, {y})'
+
+        else:
+            return [types.TextContent(type="text", text=json.dumps({
+                "status": "error",
+                "message": (
+                    f"Unsupported node_type: '{node_type}'. "
+                    "Supported: custom_event, event, function, variable_get, variable_set, "
+                    "branch, sequence, cast"
+                )
+            }, indent=2))]
+
+        script = f"""
+import unreal, json, traceback
+try:
+    bp = unreal.EditorAssetLibrary.load_asset("{bp_path}")
+    if bp is None:
+        print("UEOS_ERROR:Blueprint not found: {bp_path}")
+    else:
+        node_guid = {call}
+        if node_guid:
+            unreal.BlueprintEditorLibrary.compile_blueprint(bp)
+            unreal.EditorAssetLibrary.save_asset("{bp_path}")
+            print("UEOS_RESULT:" + json.dumps({{"status": "success", "node_id": node_guid, "node_type": "{node_type}", "graph": "{graph}", "blueprint": "{bp_path}"}}  ))
+        else:
+            print("UEOS_ERROR:add node returned empty GUID — node_type={node_type}, graph={graph}")
+except Exception as e:
+    print("UEOS_ERROR:" + traceback.format_exc().replace("\\n", " | "))
+"""
+        result = await self.ue.execute_python(script)
+        return self._parse_result(result)
 
     async def _connect_pins(self, args: dict) -> list[types.TextContent]:
-        return [types.TextContent(type="text", text=json.dumps({
-            "status": "info",
-            "message": "Pin connection requires KismetEditorUtilities which is not exposed to Python in UE 5.4. Use ueos_run_python for graph-level operations."
-        }, indent=2))]
+        bp_path   = args["blueprint_path"]
+        graph     = args.get("graph", "EventGraph")
+        from_node = args["from_node"]
+        from_pin  = args["from_pin"]
+        to_node   = args["to_node"]
+        to_pin    = args["to_pin"]
+
+        script = f"""
+import unreal, json, traceback
+try:
+    bp = unreal.EditorAssetLibrary.load_asset("{bp_path}")
+    if bp is None:
+        print("UEOS_ERROR:Blueprint not found: {bp_path}")
+    else:
+        ok = unreal.PhotonBPLibrary.connect_pins(
+            bp, "{graph}",
+            "{from_node}", "{from_pin}",
+            "{to_node}",   "{to_pin}"
+        )
+        if ok:
+            unreal.BlueprintEditorLibrary.compile_blueprint(bp)
+            unreal.EditorAssetLibrary.save_asset("{bp_path}")
+            print("UEOS_RESULT:" + json.dumps({{"status": "connected", "from": "{from_node}.{from_pin}", "to": "{to_node}.{to_pin}", "graph": "{graph}", "blueprint": "{bp_path}"}}  ))
+        else:
+            print("UEOS_ERROR:connect_pins failed — check node GUIDs and pin names are correct")
+except Exception as e:
+    print("UEOS_ERROR:" + traceback.format_exc().replace("\\n", " | "))
+"""
+        result = await self.ue.execute_python(script)
+        return self._parse_result(result)
+
+    async def _get_graph_nodes(self, args: dict) -> list[types.TextContent]:
+        bp_path = args["blueprint_path"]
+        graph   = args.get("graph", "EventGraph")
+
+        script = f"""
+import unreal, json, traceback
+try:
+    bp = unreal.EditorAssetLibrary.load_asset("{bp_path}")
+    if bp is None:
+        print("UEOS_ERROR:Blueprint not found: {bp_path}")
+    else:
+        raw = unreal.PhotonBPLibrary.get_graph_nodes(bp, "{graph}")
+        print("UEOS_RESULT:" + raw)
+except Exception as e:
+    print("UEOS_ERROR:" + traceback.format_exc().replace("\\n", " | "))
+"""
+        result = await self.ue.execute_python(script)
+        # _parse_result looks for UEOS_RESULT: prefix, but raw is already a JSON array.
+        # Wrap it for consistent output.
+        output = result.get("output", "")
+        for line in output.replace("\r", "").split("\n"):
+            line = line.strip()
+            if line.startswith("UEOS_RESULT:"):
+                raw = line[len("UEOS_RESULT:"):]
+                try:
+                    nodes = json.loads(raw)
+                    return [types.TextContent(type="text", text=json.dumps(
+                        {"status": "success", "graph": graph, "blueprint": bp_path, "nodes": nodes},
+                        indent=2
+                    ))]
+                except Exception:
+                    return [types.TextContent(type="text", text=raw)]
+            if line.startswith("UEOS_ERROR:"):
+                return [types.TextContent(type="text", text=json.dumps(
+                    {"status": "error", "message": line[len("UEOS_ERROR:"):]}, indent=2
+                ))]
+        return [types.TextContent(type="text", text=json.dumps(
+            {"status": "error", "message": "No output from UE", "raw": output[:500]}, indent=2
+        ))]
+
+    async def _set_pin_value(self, args: dict) -> list[types.TextContent]:
+        bp_path  = args["blueprint_path"]
+        graph    = args.get("graph", "EventGraph")
+        node_id  = args["node_id"]
+        pin_name = args["pin_name"]
+        value    = args["value"]
+
+        script = f"""
+import unreal, json, traceback
+try:
+    bp = unreal.EditorAssetLibrary.load_asset("{bp_path}")
+    if bp is None:
+        print("UEOS_ERROR:Blueprint not found: {bp_path}")
+    else:
+        ok = unreal.PhotonBPLibrary.set_pin_default_value(bp, "{graph}", "{node_id}", "{pin_name}", "{value}")
+        if ok:
+            unreal.BlueprintEditorLibrary.compile_blueprint(bp)
+            unreal.EditorAssetLibrary.save_asset("{bp_path}")
+            print("UEOS_RESULT:" + json.dumps({{"status": "success", "node": "{node_id}", "pin": "{pin_name}", "value": "{value}"}}  ))
+        else:
+            print("UEOS_ERROR:set_pin_default_value failed — check node GUID and pin name")
+except Exception as e:
+    print("UEOS_ERROR:" + traceback.format_exc().replace("\\n", " | "))
+"""
+        result = await self.ue.execute_python(script)
+        return self._parse_result(result)
 
     async def _set_construction_script(self, args: dict) -> list[types.TextContent]:
         bp_path = args["blueprint_path"]
