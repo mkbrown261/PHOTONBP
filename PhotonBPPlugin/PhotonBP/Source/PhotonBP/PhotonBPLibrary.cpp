@@ -32,7 +32,7 @@
 #include "Components/HorizontalBox.h"
 #include "Components/VerticalBox.h"
 #include "Components/Overlay.h"
-#include "UMGEditor/Public/WidgetBlueprint.h"
+#include "WidgetBlueprint.h"
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
