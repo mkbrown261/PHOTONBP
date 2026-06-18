@@ -1,13 +1,12 @@
-"""
-PhotonBP end-to-end test.
-Run from Windows PowerShell:
-    python C:\Users\AVIAT\Downloads\PHOTONBP-main\test_photon.py
-"""
+# PhotonBP end-to-end test.
+# Run from Windows PowerShell:
+#   python C:/Users/AVIAT/Downloads/PHOTONBP-main/test_photon.py
 
 import sys
 import json
 
-sys.path.insert(0, r'C:\Users\AVIAT\Downloads\PHOTONBP-main\mcp_server')
+import os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'mcp_server'))
 
 from remote_control.remote_execution import RemoteExecution
 
