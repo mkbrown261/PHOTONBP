@@ -503,85 +503,56 @@ except Exception as e:
         is_exposed = args.get("is_exposed", False)
         category = args.get("category", "Default")
 
-        # Confirmed-working type map for EdGraphPinType.import_text()
-        # pin_category attribute is PROTECTED in UE 5.4 Python — must use import_text()
-        # add_member_variable does NOT exist on BlueprintEditorLibrary in UE 5.4
+        # Map type string to (PinCategory, PinSubCategory, PinSubCategoryObjectPath)
         type_map = {
-            "bool":       ("bool",   "", ""),
-            "boolean":    ("bool",   "", ""),
-            "int":        ("int",    "", ""),
-            "integer":    ("int",    "", ""),
-            "int64":      ("int64",  "", ""),
-            "float":      ("real",   "float", ""),
-            "double":     ("real",   "double", ""),
-            "string":     ("string", "", ""),
-            "name":       ("name",   "", ""),
-            "text":       ("text",   "", ""),
-            "vector":     ("struct", "", "/Script/CoreUObject.Vector"),
-            "rotator":    ("struct", "", "/Script/CoreUObject.Rotator"),
-            "transform":  ("struct", "", "/Script/CoreUObject.Transform"),
-            "linearcolor":("struct", "", "/Script/CoreUObject.LinearColor"),
-            "color":      ("struct", "", "/Script/CoreUObject.LinearColor"),
-            "vector2d":   ("struct", "", "/Script/CoreUObject.Vector2D"),
-            "actor":      ("object", "", "/Script/Engine.Actor"),
-            "animsequencebase": ("object", "", "/Script/Engine.AnimSequenceBase"),
-            "soundbase":  ("object", "", "/Script/Engine.SoundBase"),
-            "staticmeshcomponent": ("object", "", "/Script/Engine.StaticMeshComponent"),
-            "skeletalmeshcomponent":("object","", "/Script/Engine.SkeletalMeshComponent"),
+            "bool":               ("bool",   "",       ""),
+            "boolean":            ("bool",   "",       ""),
+            "int":                ("int",    "",       ""),
+            "integer":            ("int",    "",       ""),
+            "int64":              ("int64",  "",       ""),
+            "float":              ("real",   "float",  ""),
+            "double":             ("real",   "double", ""),
+            "string":             ("string", "",       ""),
+            "name":               ("name",   "",       ""),
+            "text":               ("text",   "",       ""),
+            "vector":             ("struct", "",       "/Script/CoreUObject.Vector"),
+            "rotator":            ("struct", "",       "/Script/CoreUObject.Rotator"),
+            "transform":          ("struct", "",       "/Script/CoreUObject.Transform"),
+            "linearcolor":        ("struct", "",       "/Script/CoreUObject.LinearColor"),
+            "color":              ("struct", "",       "/Script/CoreUObject.LinearColor"),
+            "vector2d":           ("struct", "",       "/Script/CoreUObject.Vector2D"),
+            "actor":              ("object", "",       "/Script/Engine.Actor"),
+            "animsequencebase":   ("object", "",       "/Script/Engine.AnimSequenceBase"),
+            "soundbase":          ("object", "",       "/Script/Engine.SoundBase"),
+            "staticmeshcomponent":("object", "",       "/Script/Engine.StaticMeshComponent"),
+            "skeletalmeshcomponent":("object","",      "/Script/Engine.SkeletalMeshComponent"),
         }
 
         if var_type in type_map:
             pin_cat, pin_sub_cat, pin_sub_obj = type_map[var_type]
         else:
-            # Treat as object reference; user may pass full /Script/... path
             pin_cat, pin_sub_cat, pin_sub_obj = "object", "", var_type
-
-        # Build import_text string — the ONLY working method for EdGraphPinType in this build
-        if pin_sub_obj:
-            if pin_cat == "struct":
-                import_txt = f'(PinCategory="{pin_cat}",PinSubCategoryObject=ScriptStruct\'"{pin_sub_obj}"\')'
-            else:
-                import_txt = f'(PinCategory="{pin_cat}",PinSubCategoryObject=Class\'"{pin_sub_obj}"\')'
-        elif pin_sub_cat:
-            import_txt = f'(PinCategory="{pin_cat}",PinSubCategory="{pin_sub_cat}")'
-        else:
-            import_txt = f'(PinCategory="{pin_cat}")'
 
         ie_str = "True" if is_exposed else "False"
 
-        script = (
-            "import unreal, json, traceback\n"
-            "try:\n"
-            f'    bp = unreal.EditorAssetLibrary.load_asset("{bp_path}")\n'
-            "    if bp is None:\n"
-            f'        print("UEOS_ERROR:Blueprint not found: {bp_path}")\n'
-            "    else:\n"
-            "        pin_type = unreal.EdGraphPinType()\n"
-            f'        pin_type.import_text(\'{import_txt}\')\n'
-            "        added = False\n"
-            "        try:\n"
-            "            var_desc = unreal.BPVariableDescription()\n"
-            f'            var_desc.set_editor_property("VarName", unreal.Name("{var_name}"))\n'
-            '            var_desc.set_editor_property("VarType", pin_type)\n'
-            '            existing = bp.get_editor_property("NewVariables")\n'
-            "            existing.append(var_desc)\n"
-            '            bp.set_editor_property("NewVariables", existing)\n'
-            "            added = True\n"
-            "        except Exception as ev:\n"
-            '            print("UEOS_ERROR:NewVariables append failed: " + str(ev)[:200])\n'
-            "        if added:\n"
-            "            try:\n"
-            f'                unreal.BlueprintEditorLibrary.set_blueprint_variable_instance_editable(bp, "{var_name}", {ie_str})\n'
-            f'                unreal.BlueprintEditorLibrary.set_blueprint_variable_expose_on_spawn(bp, "{var_name}", {ie_str})\n'
-            "            except Exception:\n"
-            "                pass\n"
-            "            bp.modify()\n"
-            "            unreal.BlueprintEditorLibrary.compile_blueprint(bp)\n"
-            f'            unreal.EditorAssetLibrary.save_asset("{bp_path}")\n'
-            f'            print("UEOS_RESULT:" + json.dumps({{"status": "success", "variable": "{var_name}", "type": "{var_type}", "blueprint": "{bp_path}"}}))\n'
-            "except Exception as e:\n"
-            '    print("UEOS_ERROR:" + traceback.format_exc().replace("\\n", " | "))\n'
-        )
+        script = f"""
+import unreal, json, traceback
+try:
+    bp = unreal.EditorAssetLibrary.load_asset("{bp_path}")
+    if bp is None:
+        print("UEOS_ERROR:Blueprint not found: {bp_path}")
+    else:
+        result = unreal.PhotonBPLibrary.add_member_variable(bp, "{var_name}", "{pin_cat}", "{pin_sub_cat}", "{pin_sub_obj}")
+        if result:
+            unreal.PhotonBPLibrary.set_variable_flags(bp, "{var_name}", {ie_str}, {ie_str})
+            unreal.BlueprintEditorLibrary.compile_blueprint(bp)
+            unreal.EditorAssetLibrary.save_asset("{bp_path}")
+            print("UEOS_RESULT:" + json.dumps({{"status": "success", "variable": "{var_name}", "type": "{var_type}", "blueprint": "{bp_path}"}}))
+        else:
+            print("UEOS_ERROR:add_member_variable returned False for {var_name}")
+except Exception as e:
+    print("UEOS_ERROR:" + traceback.format_exc().replace("\\n", " | "))
+"""
         result = await self.ue.execute_python(script)
         return self._parse_result(result)
 
@@ -613,27 +584,23 @@ except Exception as e:
         bp_path = args["blueprint_path"]
         event_name = args["name"]
 
-        # add_custom_event does NOT exist in UE 5.4 Python API
-        # Closest working equivalent: add_function_graph in the EventGraph
-        # The user can open the BP and the function will appear as a callable event stub
-        script = (
-            "import unreal, json, traceback\n"
-            "try:\n"
-            f'    bp = unreal.EditorAssetLibrary.load_asset("{bp_path}")\n'
-            "    if bp is None:\n"
-            f'        print("UEOS_ERROR:Blueprint not found: {bp_path}")\n'
-            "    else:\n"
-            f'        graph = unreal.BlueprintEditorLibrary.add_function_graph(bp, "{event_name}")\n'
-            "        if graph:\n"
-            "            bp.modify()\n"
-            "            unreal.BlueprintEditorLibrary.compile_blueprint(bp)\n"
-            f'            unreal.EditorAssetLibrary.save_asset("{bp_path}")\n'
-            f'            print("UEOS_RESULT:" + json.dumps({{"status": "success", "event": "{event_name}", "note": "Created as function graph; add_custom_event not in UE 5.4 Python API", "blueprint": "{bp_path}"}}))\n'
-            "        else:\n"
-            f'            print("UEOS_ERROR:add_function_graph returned None for {event_name}")\n'
-            "except Exception as e:\n"
-            '    print("UEOS_ERROR:" + traceback.format_exc().replace("\\n", " | "))\n'
-        )
+        script = f"""
+import unreal, json, traceback
+try:
+    bp = unreal.EditorAssetLibrary.load_asset("{bp_path}")
+    if bp is None:
+        print("UEOS_ERROR:Blueprint not found: {bp_path}")
+    else:
+        result = unreal.PhotonBPLibrary.add_custom_event(bp, "{event_name}")
+        if result:
+            unreal.BlueprintEditorLibrary.compile_blueprint(bp)
+            unreal.EditorAssetLibrary.save_asset("{bp_path}")
+            print("UEOS_RESULT:" + json.dumps({{"status": "success", "event": "{event_name}", "blueprint": "{bp_path}"}}))
+        else:
+            print("UEOS_ERROR:add_custom_event returned False for {event_name}")
+except Exception as e:
+    print("UEOS_ERROR:" + traceback.format_exc().replace("\\n", " | "))
+"""
         result = await self.ue.execute_python(script)
         return self._parse_result(result)
 
@@ -699,52 +666,23 @@ except Exception as e:
         bp_path = args["blueprint_path"]
         disp_name = args["name"]
 
-        # add_event_dispatcher does NOT exist in UE 5.4 Python API
-        # Dispatchers are stored in bp.EventDispatchers (FMulticastDelegateProperty)
-        # We try two paths: EventDispatchers array, then NewVariables with mcdelegate pin type
-        script = (
-            "import unreal, json, traceback\n"
-            "try:\n"
-            f'    bp = unreal.EditorAssetLibrary.load_asset("{bp_path}")\n'
-            "    if bp is None:\n"
-            f'        print("UEOS_ERROR:Blueprint not found: {bp_path}")\n'
-            "    else:\n"
-            "        added = False\n"
-            "        err_msgs = []\n"
-            # Try 1: EventDispatchers array
-            "        try:\n"
-            "            existing_disp = bp.get_editor_property('EventDispatchers')\n"
-            "            d = unreal.BPVariableDescription()\n"
-            f'            d.set_editor_property("VarName", unreal.Name("{disp_name}"))\n'
-            "            existing_disp.append(d)\n"
-            "            bp.set_editor_property('EventDispatchers', existing_disp)\n"
-            "            added = True\n"
-            "        except Exception as e1:\n"
-            "            err_msgs.append('EventDispatchers: ' + str(e1)[:100])\n"
-            # Try 2: NewVariables with mcdelegate pin type
-            "        if not added:\n"
-            "            try:\n"
-            "                pin_type = unreal.EdGraphPinType()\n"
-            "                pin_type.import_text('(PinCategory=\"mcdelegate\")')\n"
-            "                var_desc = unreal.BPVariableDescription()\n"
-            f'                var_desc.set_editor_property("VarName", unreal.Name("{disp_name}"))\n'
-            "                var_desc.set_editor_property('VarType', pin_type)\n"
-            "                existing = bp.get_editor_property('NewVariables')\n"
-            "                existing.append(var_desc)\n"
-            "                bp.set_editor_property('NewVariables', existing)\n"
-            "                added = True\n"
-            "            except Exception as e2:\n"
-            "                err_msgs.append('NewVariables mcdelegate: ' + str(e2)[:100])\n"
-            "        if added:\n"
-            "            bp.modify()\n"
-            "            unreal.BlueprintEditorLibrary.compile_blueprint(bp)\n"
-            f'            unreal.EditorAssetLibrary.save_asset("{bp_path}")\n'
-            f'            print("UEOS_RESULT:" + json.dumps({{"status": "success", "dispatcher": "{disp_name}", "blueprint": "{bp_path}"}}))\n'
-            "        else:\n"
-            f'            print("UEOS_ERROR:Could not add dispatcher {disp_name}: " + str(err_msgs))\n'
-            "except Exception as e:\n"
-            '    print("UEOS_ERROR:" + traceback.format_exc().replace("\\n", " | "))\n'
-        )
+        script = f"""
+import unreal, json, traceback
+try:
+    bp = unreal.EditorAssetLibrary.load_asset("{bp_path}")
+    if bp is None:
+        print("UEOS_ERROR:Blueprint not found: {bp_path}")
+    else:
+        result = unreal.PhotonBPLibrary.add_event_dispatcher(bp, "{disp_name}")
+        if result:
+            unreal.BlueprintEditorLibrary.compile_blueprint(bp)
+            unreal.EditorAssetLibrary.save_asset("{bp_path}")
+            print("UEOS_RESULT:" + json.dumps({{"status": "success", "dispatcher": "{disp_name}", "blueprint": "{bp_path}"}}))
+        else:
+            print("UEOS_ERROR:add_event_dispatcher returned False for {disp_name}")
+except Exception as e:
+    print("UEOS_ERROR:" + traceback.format_exc().replace("\\n", " | "))
+"""
         result = await self.ue.execute_python(script)
         return self._parse_result(result)
 
