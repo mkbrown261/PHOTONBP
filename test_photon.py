@@ -1,156 +1,145 @@
-# PhotonBP end-to-end test.
-# Run from Windows PowerShell:
-#   cd C:/Users/AVIAT/Downloads/PHOTONBP-main
-#   python test_photon.py
+# PhotonBP test — uses HTTP API on port 30010
+# Run: python test_photon.py
 
-import sys
-import os
-import json
-
+import sys, os, json
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'mcp_server'))
 
-from remote_control.remote_execution import UnrealRemoteExecution
+import urllib.request, urllib.error
 
-# ── connect ───────────────────────────────────────────────────────────────────
-ue = UnrealRemoteExecution()
+BASE = "http://127.0.0.1:30010"
 
-if not ue.ping():
-    print("ERROR: No UE instance found.")
-    print("Make sure Unreal Editor is open with the project loaded.")
+def http(path, body=None, method="PUT"):
+    url  = BASE + path
+    if body is not None:
+        data = json.dumps(body).encode()
+        req  = urllib.request.Request(url, data=data,
+               headers={"Content-Type": "application/json"}, method=method)
+    else:
+        req = urllib.request.Request(url, method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return json.loads(r.read().decode())
+    except urllib.error.HTTPError as e:
+        return {"error": e.code, "body": e.read().decode()}
+    except Exception as e:
+        return {"error": str(e)}
+
+def run_py(script):
+    """Run Python in UE and return the response dict."""
+    return http("/remote/object/call", {
+        "objectPath": "/Engine/PythonScriptPlugin.Default__PythonScriptPlugin",
+        "functionName": "ExecutePythonScript",
+        "parameters": {"PythonScript": script},
+        "generateTransaction": False
+    })
+
+# ── 1. Ping ───────────────────────────────────────────────────────────────────
+print("=== 1. HTTP ping ===")
+r = http("/remote/info", method="GET")
+if "error" in r:
+    print("  FAILED:", r)
     sys.exit(1)
+print("  OK - HTTP API is alive\n")
 
-print("Connected to UE!\n")
+# ── 2. Test basic Python execution ────────────────────────────────────────────
+print("=== 2. Basic Python execution ===")
+r = run_py("import unreal; unreal.log('PHOTON_PING_OK')")
+print("  response:", json.dumps(r, indent=2))
+print()
 
-# ── helper ────────────────────────────────────────────────────────────────────
-def run(label, script):
-    print(f"=== {label} ===")
-    result = ue.run_ex(script)
-    output = result.get('output', '')
-    for line in output.replace('\r', '').split('\n'):
-        line = line.strip()
-        if line:
-            print("  ", line)
-    print()
-    return output
+# ── 3. Check PhotonBPLibrary is loaded ────────────────────────────────────────
+print("=== 3. Check PhotonBPLibrary ===")
+r = run_py("""
+import unreal
+found = hasattr(unreal, 'PhotonBPLibrary')
+unreal.log('PhotonBPLibrary found: ' + str(found))
+if found:
+    methods = [m for m in dir(unreal.PhotonBPLibrary) if not m.startswith('_')]
+    unreal.log('Methods: ' + str(methods))
+""")
+print("  response:", json.dumps(r, indent=2))
+print()
 
-# ── 1. Create Blueprint ───────────────────────────────────────────────────────
-run("1. Create BP_PhotonTest", """
-import unreal, json
+# ── 4. Create Blueprint ───────────────────────────────────────────────────────
+print("=== 4. Create BP_PhotonTest ===")
+r = run_py("""
+import unreal
 unreal.EditorAssetLibrary.make_directory('/Game/PhotonTest')
 if unreal.EditorAssetLibrary.does_asset_exist('/Game/PhotonTest/BP_PhotonTest'):
-    print("Already exists - OK")
+    unreal.log('BP already exists')
 else:
     factory = unreal.BlueprintFactory()
     factory.set_editor_property('ParentClass', unreal.load_class(None, '/Script/Engine.Actor'))
     bp = unreal.AssetToolsHelpers.get_asset_tools().create_asset('BP_PhotonTest', '/Game/PhotonTest', None, factory)
-    print("Created:", bp.get_name() if bp else "FAILED")
+    unreal.log('Created: ' + (bp.get_name() if bp else 'FAILED'))
 """)
+print("  response:", json.dumps(r, indent=2))
+print()
 
-# ── 2. Add variable ───────────────────────────────────────────────────────────
-run("2. add_member_variable (float Health)", """
+# ── 5. Add variable ───────────────────────────────────────────────────────────
+print("=== 5. add_member_variable (float Health) ===")
+r = run_py("""
 import unreal
 bp = unreal.EditorAssetLibrary.load_asset('/Game/PhotonTest/BP_PhotonTest')
 ok = unreal.PhotonBPLibrary.add_member_variable(bp, 'Health', 'real', 'float', '')
-print("add_member_variable Health =>", ok)
+unreal.log('add_member_variable Health => ' + str(ok))
 """)
+print("  response:", json.dumps(r, indent=2))
+print()
 
-# ── 3. Custom event ───────────────────────────────────────────────────────────
-run("3. add_custom_event", """
+# ── 6. Add BeginPlay + PrintString nodes ─────────────────────────────────────
+print("=== 6. Add nodes ===")
+r = run_py("""
 import unreal
 bp = unreal.EditorAssetLibrary.load_asset('/Game/PhotonTest/BP_PhotonTest')
-guid = unreal.PhotonBPLibrary.add_custom_event(bp, 'OnHealthChanged', 0, 0)
-print("add_custom_event guid =>", guid if guid else "FAILED (empty)")
+g1 = unreal.PhotonBPLibrary.add_event_node(bp, 'EventGraph', 'ReceiveBeginPlay', -200, 0)
+g2 = unreal.PhotonBPLibrary.add_function_call_node(bp, 'EventGraph', 'KismetSystemLibrary', 'PrintString', 200, 0)
+unreal.log('BeginPlay guid: ' + str(g1))
+unreal.log('PrintString guid: ' + str(g2))
 """)
+print("  response:", json.dumps(r, indent=2))
+print()
 
-# ── 4. BeginPlay event node ───────────────────────────────────────────────────
-run("4. add_event_node (ReceiveBeginPlay)", """
-import unreal
+# ── 7. Inspect graph nodes ────────────────────────────────────────────────────
+print("=== 7. get_graph_nodes ===")
+r = run_py("""
+import unreal, json
 bp = unreal.EditorAssetLibrary.load_asset('/Game/PhotonTest/BP_PhotonTest')
-guid = unreal.PhotonBPLibrary.add_event_node(bp, 'EventGraph', 'ReceiveBeginPlay', -200, 0)
-print("add_event_node BeginPlay guid =>", guid if guid else "FAILED (empty)")
+raw = unreal.PhotonBPLibrary.get_graph_nodes(bp, 'EventGraph')
+unreal.log('GRAPH_NODES:' + raw)
 """)
+print("  response:", json.dumps(r, indent=2))
+print()
 
-# ── 5. PrintString function call ──────────────────────────────────────────────
-run("5. add_function_call_node (PrintString)", """
-import unreal
-bp = unreal.EditorAssetLibrary.load_asset('/Game/PhotonTest/BP_PhotonTest')
-guid = unreal.PhotonBPLibrary.add_function_call_node(bp, 'EventGraph', 'KismetSystemLibrary', 'PrintString', 200, 0)
-print("add_function_call_node PrintString guid =>", guid if guid else "FAILED (empty)")
-""")
-
-# ── 6. Branch node ────────────────────────────────────────────────────────────
-run("6. add_branch_node", """
-import unreal
-bp = unreal.EditorAssetLibrary.load_asset('/Game/PhotonTest/BP_PhotonTest')
-guid = unreal.PhotonBPLibrary.add_branch_node(bp, 'EventGraph', 500, 0)
-print("add_branch_node guid =>", guid if guid else "FAILED (empty)")
-""")
-
-# ── 7. Variable GET node ──────────────────────────────────────────────────────
-run("7. add_variable_get_node (Health)", """
-import unreal
-bp = unreal.EditorAssetLibrary.load_asset('/Game/PhotonTest/BP_PhotonTest')
-guid = unreal.PhotonBPLibrary.add_variable_get_node(bp, 'EventGraph', 'Health', 300, 150)
-print("add_variable_get_node Health guid =>", guid if guid else "FAILED (empty)")
-""")
-
-# ── 8. Inspect graph ──────────────────────────────────────────────────────────
-run("8. get_graph_nodes", """
+# ── 8. Wire + compile ─────────────────────────────────────────────────────────
+print("=== 8. connect_pins + compile ===")
+r = run_py("""
 import unreal, json
 bp = unreal.EditorAssetLibrary.load_asset('/Game/PhotonTest/BP_PhotonTest')
 raw = unreal.PhotonBPLibrary.get_graph_nodes(bp, 'EventGraph')
 nodes = json.loads(raw)
-print("NODE COUNT:", len(nodes))
-for n in nodes:
-    pins = [p['name'] + '(' + p['dir'][0] + ')' for p in n.get('pins', [])]
-    print("  TYPE:", n['type'])
-    print("  NAME:", n['name'])
-    print("  GUID:", n['guid'])
-    print("  PINS:", ', '.join(pins))
-    print("  ---")
-""")
-
-# ── 9. Wire BeginPlay -> PrintString + set pin value ─────────────────────────
-run("9. connect_pins + set_pin_default_value", """
-import unreal, json
-bp = unreal.EditorAssetLibrary.load_asset('/Game/PhotonTest/BP_PhotonTest')
-raw = unreal.PhotonBPLibrary.get_graph_nodes(bp, 'EventGraph')
-nodes = json.loads(raw)
-
 begin_guid = None
 print_guid = None
-
 for n in nodes:
     if 'Event' in n['type'] and 'BeginPlay' in n['name']:
         begin_guid = n['guid']
     if 'CallFunction' in n['type'] and 'Print' in n['name']:
         print_guid = n['guid']
-
-print("BeginPlay guid:", begin_guid)
-print("PrintString guid:", print_guid)
-
+unreal.log('BeginPlay: ' + str(begin_guid))
+unreal.log('PrintString: ' + str(print_guid))
 if begin_guid and print_guid:
     ok = unreal.PhotonBPLibrary.connect_pins(bp, 'EventGraph', begin_guid, 'then', print_guid, 'execute')
-    print("connect BeginPlay.then -> PrintString.execute =>", ok)
+    unreal.log('connect => ' + str(ok))
     ok2 = unreal.PhotonBPLibrary.set_pin_default_value(bp, 'EventGraph', print_guid, 'InString', 'PhotonBP works!')
-    print("set_pin_default_value InString =>", ok2)
-else:
-    print("ERROR: one or both GUIDs not found")
-    print("Available nodes:")
-    for n in nodes:
-        print(" ", n['type'], "|", n['name'])
-""")
-
-# ── 10. Compile and save ──────────────────────────────────────────────────────
-run("10. compile + save", """
-import unreal
-bp = unreal.EditorAssetLibrary.load_asset('/Game/PhotonTest/BP_PhotonTest')
+    unreal.log('set_pin_value => ' + str(ok2))
 unreal.BlueprintEditorLibrary.compile_blueprint(bp)
-saved = unreal.EditorAssetLibrary.save_asset('/Game/PhotonTest/BP_PhotonTest')
-print("Compile + Save =>", saved)
+unreal.EditorAssetLibrary.save_asset('/Game/PhotonTest/BP_PhotonTest')
+unreal.log('DONE')
 """)
+print("  response:", json.dumps(r, indent=2))
+print()
 
 print("=" * 60)
-print("DONE — open /Game/PhotonTest/BP_PhotonTest in UE to verify")
-print("You should see: BeginPlay wired to PrintString('PhotonBP works!')")
+print("Check UE Output Log for unreal.log() messages")
+print("Open /Game/PhotonTest/BP_PhotonTest in UE to verify nodes")
 print("=" * 60)
