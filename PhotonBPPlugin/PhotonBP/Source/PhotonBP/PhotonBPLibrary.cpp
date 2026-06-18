@@ -15,6 +15,24 @@
 #include "Engine/Blueprint.h"
 #include "UObject/UnrealType.h"
 #include "UObject/UObjectGlobals.h"
+// UMG designer support
+#include "Blueprint/WidgetTree.h"
+#include "Components/Widget.h"
+#include "Components/PanelWidget.h"
+#include "Components/CanvasPanel.h"
+#include "Components/CanvasPanelSlot.h"
+#include "Components/TextBlock.h"
+#include "Components/Button.h"
+#include "Components/Image.h"
+#include "Components/ProgressBar.h"
+#include "Components/Slider.h"
+#include "Components/CheckBox.h"
+#include "Components/EditableTextBox.h"
+#include "Components/ScrollBox.h"
+#include "Components/HorizontalBox.h"
+#include "Components/VerticalBox.h"
+#include "Components/Overlay.h"
+#include "UMGEditor/Public/WidgetBlueprint.h"
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
@@ -520,13 +538,99 @@ FString UPhotonBPLibrary::GetGraphNodes(
 		PinList += TEXT("]");
 
 		Result += FString::Printf(
-			TEXT("{\"guid\":\"%s\",\"type\":\"%s\",\"name\":\"%s\",\"pins\":%s}"),
+			TEXT("{\"guid\":\"%s\",\"type\":\"%s\",\"name\":\"%s\",\"x\":%d,\"y\":%d,\"pins\":%s}"),
 			*Node->NodeGuid.ToString(),
 			*Node->GetClass()->GetName(),
 			*Node->GetNodeTitle(ENodeTitleType::FullTitle).ToString(),
+			Node->NodePosX,
+			Node->NodePosY,
 			*PinList
 		);
 	}
 	Result += TEXT("]");
 	return Result;
+}
+
+// ─── AddWidgetToDesigner ──────────────────────────────────────────────────────
+
+FString UPhotonBPLibrary::AddWidgetToDesigner(
+	UBlueprint* WidgetBlueprint,
+	FString WidgetClassName,
+	FString WidgetName,
+	int32 PosX,
+	int32 PosY,
+	int32 SizeX,
+	int32 SizeY)
+{
+	if (!WidgetBlueprint) return TEXT("");
+
+	// Must be a WidgetBlueprint
+	UWidgetBlueprint* WBP = Cast<UWidgetBlueprint>(WidgetBlueprint);
+	if (!WBP) return TEXT("");
+
+	UWidgetTree* Tree = WBP->WidgetTree;
+	if (!Tree) return TEXT("");
+
+	// ── Resolve the widget class ──────────────────────────────────────────────
+	// Try common UMG module paths
+	UClass* WidgetClass = nullptr;
+	TArray<FString> SearchPaths = {
+		FString::Printf(TEXT("/Script/UMG.%s"), *WidgetClassName),
+		FString::Printf(TEXT("/Script/UMG.U%s"), *WidgetClassName),
+	};
+	for (const FString& Path : SearchPaths)
+	{
+		WidgetClass = FindObject<UClass>(nullptr, *Path);
+		if (!WidgetClass) WidgetClass = LoadObject<UClass>(nullptr, *Path);
+		if (WidgetClass) break;
+	}
+	// Fallback: search all loaded classes by name
+	if (!WidgetClass)
+	{
+		for (TObjectIterator<UClass> It; It; ++It)
+		{
+			FString ClsName = It->GetName();
+			if (ClsName.Equals(WidgetClassName, ESearchCase::IgnoreCase) ||
+				ClsName.Equals(FString(TEXT("U")) + WidgetClassName, ESearchCase::IgnoreCase))
+			{
+				if (It->IsChildOf(UWidget::StaticClass()))
+				{
+					WidgetClass = *It;
+					break;
+				}
+			}
+		}
+	}
+	if (!WidgetClass) return TEXT("");
+
+	// ── Ensure a CanvasPanel root exists ─────────────────────────────────────
+	UCanvasPanel* Canvas = nullptr;
+	if (Tree->RootWidget)
+	{
+		Canvas = Cast<UCanvasPanel>(Tree->RootWidget);
+	}
+	if (!Canvas)
+	{
+		Canvas = Tree->ConstructWidget<UCanvasPanel>(UCanvasPanel::StaticClass(), TEXT("CanvasPanel_Root"));
+		Tree->RootWidget = Canvas;
+	}
+	if (!Canvas) return TEXT("");
+
+	// ── Create the new widget ─────────────────────────────────────────────────
+	UWidget* NewWidget = Tree->ConstructWidget<UWidget>(WidgetClass, FName(*WidgetName));
+	if (!NewWidget) return TEXT("");
+
+	// ── Add to canvas and set position/size ──────────────────────────────────
+	UCanvasPanelSlot* Slot = Canvas->AddChildToCanvas(NewWidget);
+	if (Slot)
+	{
+		Slot->SetPosition(FVector2D(PosX, PosY));
+		Slot->SetSize(FVector2D(SizeX, SizeY));
+	}
+
+	FBlueprintEditorUtils::MarkBlueprintAsModified(WBP);
+
+	// Return a stable identifier: widget name + slot index
+	int32 SlotIndex = Canvas->GetChildrenCount() - 1;
+	return FString::Printf(TEXT("%s:%d"), *WidgetName, SlotIndex);
 }

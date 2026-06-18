@@ -707,68 +707,70 @@ class UMGTools:
 
     async def _add_widget_node(self, args: dict, widget_class_path: str,
                                 extra_setup: str = "") -> list[types.TextContent]:
-        """Generic helper: load widget BP, add a widget node, optionally configure it."""
+        """Generic helper: load widget BP, add a widget via PhotonBPLibrary.add_widget_to_designer.
+
+        Uses the C++ AddWidgetToDesigner UFUNCTION which directly accesses UWidgetTree —
+        the Python widget_tree attribute is protected in UE 5.3+ and cannot be used from Python.
+        extra_setup is injected Python code that runs after the widget is placed to set properties
+        (color, text, percent, etc.) via the widget's UObject Python bindings.
+        """
         widget_path = args["widget_path"]
         name        = args["name"]
         pos         = args.get("position", [0, 0])
         size        = args.get("size", [200, 50])
         z_order     = args.get("z_order", 0)
+        # Extract just the class name from the full path for the C++ call
+        # e.g. "/Script/UMG.ProgressBar" → "ProgressBar"
+        widget_class_name = widget_class_path.split(".")[-1]
 
         script = dedent(f"""
             import unreal, json
             try:
                 widget_bp = unreal.load_asset('{widget_path}')
                 if not widget_bp:
-                    print('UEOS_ERROR:' + json.dumps({{'error': 'Widget Blueprint not found'}}))
+                    print('UEOS_ERROR:Widget Blueprint not found: {widget_path}')
                     raise SystemExit()
 
-                widget_cls = unreal.load_class(None, '{widget_class_path}')
-                if not widget_cls:
-                    print('UEOS_ERROR:' + json.dumps({{'error': 'Widget class not found: {widget_class_path}'}}))
+                # Use PhotonBPLibrary C++ to add the widget — bypasses Python widget_tree restriction
+                slot_id = unreal.PhotonBPLibrary.add_widget_to_designer(
+                    widget_bp,
+                    '{widget_class_name}',
+                    '{name}',
+                    {pos[0]}, {pos[1]},
+                    {size[0]}, {size[1]}
+                )
+
+                if not slot_id:
+                    print('UEOS_ERROR:add_widget_to_designer returned empty — class "{widget_class_name}" may not exist or widget_bp is not a WidgetBlueprint')
                     raise SystemExit()
 
-                # Add widget to the designer tree
+                # ── Post-placement property setup ────────────────────────────
+                # Retrieve the newly-created widget by name from the widget tree
+                # so extra_setup code can configure it
                 widget = None
                 try:
-                    widget = unreal.WidgetBlueprintEditorLibrary.add_widget(widget_bp, widget_cls)
-                    if widget:
-                        widget.set_editor_property('slot', None)
-                except AttributeError:
-                    # Fallback: create widget object directly in the widget tree
-                    try:
-                        widget_tree = widget_bp.widget_tree
-                        widget = widget_tree.construct_widget(widget_cls, unreal.Name('{name}'))
-                    except Exception:
-                        pass
+                    widget_tree = widget_bp.widget_tree
+                    if widget_tree:
+                        widget = widget_tree.find_widget('{name}')
+                except Exception:
+                    pass  # widget_tree may be None; extra_setup is best-effort
 
-                if widget:
-                    try:
-                        widget.set_editor_property('name', unreal.Name('{name}'))
-                    except Exception:
-                        pass
-
-                    # Canvas slot positioning
-                    try:
-                        slot = widget.slot
-                        if slot and hasattr(slot, 'set_size'):
-                            slot.set_offsets(unreal.Margin({pos[0]}, {pos[1]}, {size[0]}, {size[1]}))
-                            slot.set_z_order({z_order})
-                    except Exception:
-                        pass
-
-                    {extra_setup}
+                {extra_setup}
 
                 unreal.EditorAssetLibrary.save_asset(widget_bp.get_path_name(), only_if_is_dirty=False)
                 print('UEOS_RESULT:' + json.dumps({{
-                    'status':      'added',
-                    'widget':      '{name}',
-                    'type':        '{widget_class_path}'.split('.')[-1],
-                    'widget_bp':   '{widget_path}',
-                    'position':    {pos},
-                    'size':        {size},
+                    'status':    'added',
+                    'widget':    '{name}',
+                    'type':      '{widget_class_name}',
+                    'widget_bp': '{widget_path}',
+                    'slot_id':   slot_id,
+                    'position':  {pos},
+                    'size':      {size},
                 }}))
             except SystemExit: pass
-            except Exception as e: print('UEOS_ERROR:' + json.dumps({{'error': str(e)}}))
+            except Exception as e:
+                import traceback
+                print('UEOS_ERROR:' + traceback.format_exc().replace('\\n', ' | '))
         """)
         return await self._exec(script, f"umg_add_{name}")
 
@@ -788,60 +790,27 @@ class UMGTools:
         align_map = {"left": 0, "center": 1, "right": 2, "justified": 3}
         align_val = align_map.get(alignment, 0)
 
-        script = dedent(f"""
-            import unreal, json
-            try:
-                widget_bp = unreal.load_asset('{widget_path}')
-                if not widget_bp:
-                    print('UEOS_ERROR:' + json.dumps({{'error': 'Widget BP not found'}}))
-                    raise SystemExit()
-
-                # Add TextBlock to widget tree
-                widget_tree = widget_bp.widget_tree
-                tb = widget_tree.construct_widget(unreal.TextBlock, unreal.Name('{name}'))
-
-                if tb:
-                    # Text content
-                    tb.set_text(unreal.Text('{text}'))
-
-                    # Font info
+        extra = f"""
+                if widget:
+                    try: widget.set_text(unreal.Text('{text}'))
+                    except Exception: pass
                     fi = unreal.SlateFontInfo()
                     fi.size = {font_size}
-                    fi.typeface_font_name = unreal.Name('{"Bold" if bold else "Regular"}')
-                    try:
-                        tb.font = fi
-                    except Exception:
-                        try: tb.set_editor_property('font', fi)
-                        except Exception: pass
-
-                    # Color
-                    color_struct = unreal.SlateColor()
-                    color_struct.specifies_color = unreal.SlateColorStylingMode.USE_COLOR_SPECIFIED
-                    color_struct.specified_color = unreal.LinearColor(r={color[0]}, g={color[1]}, b={color[2]}, a={color[3]})
-                    try:
-                        tb.set_editor_property('color_and_opacity', color_struct)
+                    fi.typeface_font_name = unreal.Name('{'Bold' if bold else 'Regular'}')
+                    try: widget.set_editor_property('font', fi)
                     except Exception: pass
-
-                    # Justification
                     try:
-                        tb.set_editor_property('justification', unreal.TextJustify({align_val}))
+                        cs = unreal.SlateColor()
+                        cs.specified_color = unreal.LinearColor(r={color[0]}, g={color[1]}, b={color[2]}, a={color[3]})
+                        widget.set_editor_property('color_and_opacity', cs)
                     except Exception: pass
-
-                    # Shadow
+                    try: widget.set_editor_property('justification', unreal.TextJustify({align_val}))
+                    except Exception: pass
                     if {shadow[0]} != 0 or {shadow[1]} != 0:
-                        try:
-                            tb.set_editor_property('shadow_offset', unreal.Vector2D({shadow[0]}, {shadow[1]}))
+                        try: widget.set_editor_property('shadow_offset', unreal.Vector2D({shadow[0]}, {shadow[1]}))
                         except Exception: pass
-
-                unreal.EditorAssetLibrary.save_asset(widget_bp.get_path_name(), only_if_is_dirty=False)
-                print('UEOS_RESULT:' + json.dumps({{
-                    'status': 'added', 'widget': '{name}', 'type': 'TextBlock',
-                    'text': '{text}', 'font_size': {font_size}, 'widget_bp': '{widget_path}',
-                }}))
-            except SystemExit: pass
-            except Exception as e: print('UEOS_ERROR:' + json.dumps({{'error': str(e)}}))
-        """)
-        return await self._exec(script, "umg_add_text")
+        """
+        return await self._add_widget_node(args, "/Script/UMG.TextBlock", extra_setup=extra)
 
     async def _add_button(self, args: dict) -> list[types.TextContent]:
         widget_path   = args["widget_path"]
@@ -854,52 +823,22 @@ class UMGTools:
         text_color    = args.get("text_color",    [1, 1, 1, 1])
         on_click      = args.get("on_click_event", "")
 
-        script = dedent(f"""
-            import unreal, json
-            try:
-                widget_bp   = unreal.load_asset('{widget_path}')
-                widget_tree = widget_bp.widget_tree
-
-                btn = widget_tree.construct_widget(unreal.Button, unreal.Name('{name}'))
-                if btn:
-                    # Style colors
-                    style = unreal.ButtonStyle()
-                    def make_brush(r, g, b, a):
-                        b_info = unreal.SlateBrush()
-                        b_info.tint_color = unreal.SlateColor()
-                        b_info.tint_color.specified_color = unreal.LinearColor(r=r, g=g, b=b, a=a)
-                        return b_info
-
+        extra = f"""
+                if widget:
+                    def _make_brush(r, g, b, a):
+                        bi = unreal.SlateBrush()
+                        bi.tint_color = unreal.SlateColor()
+                        bi.tint_color.specified_color = unreal.LinearColor(r=r, g=g, b=b, a=a)
+                        return bi
                     try:
-                        style.normal  = make_brush({normal_color[0]},  {normal_color[1]},  {normal_color[2]},  {normal_color[3]})
-                        style.hovered = make_brush({hovered_color[0]}, {hovered_color[1]}, {hovered_color[2]}, {hovered_color[3]})
-                        style.pressed = make_brush({pressed_color[0]}, {pressed_color[1]}, {pressed_color[2]}, {pressed_color[3]})
-                        btn.set_editor_property('widget_style', style)
+                        st = unreal.ButtonStyle()
+                        st.normal  = _make_brush({normal_color[0]},  {normal_color[1]},  {normal_color[2]},  {normal_color[3]})
+                        st.hovered = _make_brush({hovered_color[0]}, {hovered_color[1]}, {hovered_color[2]}, {hovered_color[3]})
+                        st.pressed = _make_brush({pressed_color[0]}, {pressed_color[1]}, {pressed_color[2]}, {pressed_color[3]})
+                        widget.set_editor_property('widget_style', st)
                     except Exception: pass
-
-                    # Label TextBlock child
-                    lbl = widget_tree.construct_widget(unreal.TextBlock, unreal.Name('{name}_Label'))
-                    if lbl:
-                        lbl.set_text(unreal.Text('{label}'))
-                        fi = unreal.SlateFontInfo()
-                        fi.size = {label_size}
-                        try: lbl.font = fi
-                        except Exception: pass
-                        try:
-                            lbl.set_editor_property('justification', unreal.TextJustify(1))  # center
-                        except Exception: pass
-                        try: btn.set_content(lbl)
-                        except Exception: pass
-
-                unreal.EditorAssetLibrary.save_asset(widget_bp.get_path_name(), only_if_is_dirty=False)
-                print('UEOS_RESULT:' + json.dumps({{
-                    'status': 'added', 'widget': '{name}', 'type': 'Button',
-                    'label': '{label}', 'on_click': '{on_click}', 'widget_bp': '{widget_path}',
-                }}))
-            except SystemExit: pass
-            except Exception as e: print('UEOS_ERROR:' + json.dumps({{'error': str(e)}}))
-        """)
-        return await self._exec(script, "umg_add_button")
+        """
+        return await self._add_widget_node(args, "/Script/UMG.Button", extra_setup=extra)
 
     async def _add_image(self, args: dict) -> list[types.TextContent]:
         widget_path  = args["widget_path"]
@@ -908,36 +847,20 @@ class UMGTools:
         tint         = args.get("tint", [1, 1, 1, 1])
         draw_type    = args.get("draw_type", "image")
 
-        script = dedent(f"""
-            import unreal, json
-            try:
-                widget_bp   = unreal.load_asset('{widget_path}')
-                widget_tree = widget_bp.widget_tree
-                img = widget_tree.construct_widget(unreal.Image, unreal.Name('{name}'))
-                if img:
-                    # Tint
+        extra = f"""
+                if widget:
                     try:
-                        color = unreal.SlateColor()
-                        color.specified_color = unreal.LinearColor(r={tint[0]}, g={tint[1]}, b={tint[2]}, a={tint[3]})
-                        img.set_editor_property('color_and_opacity', color)
+                        tc = unreal.SlateColor()
+                        tc.specified_color = unreal.LinearColor(r={tint[0]}, g={tint[1]}, b={tint[2]}, a={tint[3]})
+                        widget.set_editor_property('color_and_opacity', tc)
                     except Exception: pass
-
-                    # Texture
                     if '{texture_path}':
                         tex = unreal.load_asset('{texture_path}')
                         if tex:
-                            try: img.set_brush_from_texture(tex)
+                            try: widget.set_brush_from_texture(tex)
                             except Exception: pass
-
-                unreal.EditorAssetLibrary.save_asset(widget_bp.get_path_name(), only_if_is_dirty=False)
-                print('UEOS_RESULT:' + json.dumps({{
-                    'status': 'added', 'widget': '{name}', 'type': 'Image',
-                    'texture': '{texture_path}', 'widget_bp': '{widget_path}',
-                }}))
-            except SystemExit: pass
-            except Exception as e: print('UEOS_ERROR:' + json.dumps({{'error': str(e)}}))
-        """)
-        return await self._exec(script, "umg_add_image")
+        """
+        return await self._add_widget_node(args, "/Script/UMG.Image", extra_setup=extra)
 
     async def _add_progress_bar(self, args: dict) -> list[types.TextContent]:
         widget_path      = args["widget_path"]
@@ -950,33 +873,19 @@ class UMGTools:
         fill_map = {"left_to_right": 0, "right_to_left": 1, "top_to_bottom": 2, "bottom_to_top": 3}
         fill_val = fill_map.get(bar_fill_type, 0)
 
-        script = dedent(f"""
-            import unreal, json
-            try:
-                widget_bp   = unreal.load_asset('{widget_path}')
-                widget_tree = widget_bp.widget_tree
-                pb = widget_tree.construct_widget(unreal.ProgressBar, unreal.Name('{name}'))
-                if pb:
-                    try: pb.set_editor_property('percent', {percent})
+        extra = f"""
+                if widget:
+                    try: widget.set_editor_property('percent', {percent})
                     except Exception: pass
                     try:
-                        fill = unreal.SlateColor()
-                        fill.specified_color = unreal.LinearColor(r={fill_color[0]}, g={fill_color[1]}, b={fill_color[2]}, a={fill_color[3]})
-                        pb.set_editor_property('fill_color_and_opacity', fill)
+                        fc = unreal.SlateColor()
+                        fc.specified_color = unreal.LinearColor(r={fill_color[0]}, g={fill_color[1]}, b={fill_color[2]}, a={fill_color[3]})
+                        widget.set_editor_property('fill_color_and_opacity', fc)
                     except Exception: pass
-                    try:
-                        pb.set_editor_property('bar_fill_type', unreal.ProgressBarFillType({fill_val}))
+                    try: widget.set_editor_property('bar_fill_type', unreal.ProgressBarFillType({fill_val}))
                     except Exception: pass
-
-                unreal.EditorAssetLibrary.save_asset(widget_bp.get_path_name(), only_if_is_dirty=False)
-                print('UEOS_RESULT:' + json.dumps({{
-                    'status': 'added', 'widget': '{name}', 'type': 'ProgressBar',
-                    'percent': {percent}, 'widget_bp': '{widget_path}',
-                }}))
-            except SystemExit: pass
-            except Exception as e: print('UEOS_ERROR:' + json.dumps({{'error': str(e)}}))
-        """)
-        return await self._exec(script, "umg_add_progress_bar")
+        """
+        return await self._add_widget_node(args, "/Script/UMG.ProgressBar", extra_setup=extra)
 
     async def _add_slider(self, args: dict) -> list[types.TextContent]:
         widget_path = args["widget_path"]
@@ -987,35 +896,22 @@ class UMGTools:
         step_size   = args.get("step_size", 0.01)
         orientation = args.get("orientation", "horizontal")
 
-        script = dedent(f"""
-            import unreal, json
-            try:
-                widget_bp   = unreal.load_asset('{widget_path}')
-                widget_tree = widget_bp.widget_tree
-                sl = widget_tree.construct_widget(unreal.Slider, unreal.Name('{name}'))
-                if sl:
-                    try: sl.set_editor_property('min_value', {min_val})
+        extra = f"""
+                if widget:
+                    try: widget.set_editor_property('min_value', {min_val})
                     except Exception: pass
-                    try: sl.set_editor_property('max_value', {max_val})
+                    try: widget.set_editor_property('max_value', {max_val})
                     except Exception: pass
-                    try: sl.set_editor_property('value', {value})
+                    try: widget.set_editor_property('value', {value})
                     except Exception: pass
-                    try: sl.set_editor_property('step_size', {step_size})
+                    try: widget.set_editor_property('step_size', {step_size})
                     except Exception: pass
                     try:
                         orient = unreal.Orientation.ORIENT_HORIZONTAL if '{orientation}' == 'horizontal' else unreal.Orientation.ORIENT_VERTICAL
-                        sl.set_editor_property('orientation', orient)
+                        widget.set_editor_property('orientation', orient)
                     except Exception: pass
-
-                unreal.EditorAssetLibrary.save_asset(widget_bp.get_path_name(), only_if_is_dirty=False)
-                print('UEOS_RESULT:' + json.dumps({{
-                    'status': 'added', 'widget': '{name}', 'type': 'Slider',
-                    'min': {min_val}, 'max': {max_val}, 'value': {value},
-                }}))
-            except SystemExit: pass
-            except Exception as e: print('UEOS_ERROR:' + json.dumps({{'error': str(e)}}))
-        """)
-        return await self._exec(script, "umg_add_slider")
+        """
+        return await self._add_widget_node(args, "/Script/UMG.Slider", extra_setup=extra)
 
     async def _add_input_field(self, args: dict) -> list[types.TextContent]:
         widget_path = args["widget_path"]
@@ -1027,30 +923,15 @@ class UMGTools:
 
         widget_cls = "/Script/UMG.MultiLineEditableTextBox" if multiline else "/Script/UMG.EditableTextBox"
 
-        script = dedent(f"""
-            import unreal, json
-            try:
-                widget_bp   = unreal.load_asset('{widget_path}')
-                widget_tree = widget_bp.widget_tree
-                cls = unreal.load_class(None, '{widget_cls}')
-                tb  = widget_tree.construct_widget(cls, unreal.Name('{name}'))
-                if tb:
-                    try: tb.set_editor_property('hint_text', unreal.Text('{hint_text}'))
+        extra = f"""
+                if widget:
+                    try: widget.set_editor_property('hint_text', unreal.Text('{hint_text}'))
                     except Exception: pass
                     if {max_length} > 0:
-                        try: tb.set_editor_property('max_length', {max_length})
+                        try: widget.set_editor_property('max_length', {max_length})
                         except Exception: pass
-
-                unreal.EditorAssetLibrary.save_asset(widget_bp.get_path_name(), only_if_is_dirty=False)
-                print('UEOS_RESULT:' + json.dumps({{
-                    'status': 'added', 'widget': '{name}',
-                    'type': 'MultiLineEditableTextBox' if {str(multiline).lower()} else 'EditableTextBox',
-                    'hint': '{hint_text}', 'widget_bp': '{widget_path}',
-                }}))
-            except SystemExit: pass
-            except Exception as e: print('UEOS_ERROR:' + json.dumps({{'error': str(e)}}))
-        """)
-        return await self._exec(script, "umg_add_input_field")
+        """
+        return await self._add_widget_node(args, widget_cls, extra_setup=extra)
 
     async def _add_checkbox(self, args: dict) -> list[types.TextContent]:
         widget_path = args["widget_path"]
@@ -1058,27 +939,14 @@ class UMGTools:
         checked     = args.get("checked", False)
         label       = args.get("label", "")
 
-        script = dedent(f"""
-            import unreal, json
-            try:
-                widget_bp   = unreal.load_asset('{widget_path}')
-                widget_tree = widget_bp.widget_tree
-                cb = widget_tree.construct_widget(unreal.CheckBox, unreal.Name('{name}'))
-                if cb:
+        extra = f"""
+                if widget:
                     try:
                         state = unreal.CheckBoxState.CHECKED if {str(checked).lower()} else unreal.CheckBoxState.UNCHECKED
-                        cb.set_editor_property('checked_state', state)
+                        widget.set_editor_property('checked_state', state)
                     except Exception: pass
-
-                unreal.EditorAssetLibrary.save_asset(widget_bp.get_path_name(), only_if_is_dirty=False)
-                print('UEOS_RESULT:' + json.dumps({{
-                    'status': 'added', 'widget': '{name}', 'type': 'CheckBox',
-                    'checked': {str(checked).lower()}, 'widget_bp': '{widget_path}',
-                }}))
-            except SystemExit: pass
-            except Exception as e: print('UEOS_ERROR:' + json.dumps({{'error': str(e)}}))
-        """)
-        return await self._exec(script, "umg_add_checkbox")
+        """
+        return await self._add_widget_node(args, "/Script/UMG.CheckBox", extra_setup=extra)
 
     async def _add_combobox(self, args: dict) -> list[types.TextContent]:
         widget_path    = args["widget_path"]
@@ -1088,32 +956,17 @@ class UMGTools:
 
         options_json = json.dumps(options)
 
-        script = dedent(f"""
-            import unreal, json
-            try:
-                widget_bp   = unreal.load_asset('{widget_path}')
-                widget_tree = widget_bp.widget_tree
-                cb = widget_tree.construct_widget(unreal.ComboBoxString, unreal.Name('{name}'))
-                if cb:
-                    options = {options_json}
+        extra = f"""
+                if widget:
+                    opts = {options_json}
                     try:
-                        for opt in options:
-                            cb.add_option(opt)
-                        if '{default_option}' and '{default_option}' in options:
-                            cb.set_selected_option('{default_option}')
-                        elif options:
-                            cb.set_selected_option(options[0])
+                        for opt in opts:
+                            widget.add_option(opt)
+                        sel = '{default_option}' if '{default_option}' in opts else (opts[0] if opts else '')
+                        if sel: widget.set_selected_option(sel)
                     except Exception: pass
-
-                unreal.EditorAssetLibrary.save_asset(widget_bp.get_path_name(), only_if_is_dirty=False)
-                print('UEOS_RESULT:' + json.dumps({{
-                    'status': 'added', 'widget': '{name}', 'type': 'ComboBoxString',
-                    'options': {options_json}, 'widget_bp': '{widget_path}',
-                }}))
-            except SystemExit: pass
-            except Exception as e: print('UEOS_ERROR:' + json.dumps({{'error': str(e)}}))
-        """)
-        return await self._exec(script, "umg_add_combobox")
+        """
+        return await self._add_widget_node(args, "/Script/UMG.ComboBoxString", extra_setup=extra)
 
     async def _add_scroll_box(self, args: dict) -> list[types.TextContent]:
         widget_path    = args["widget_path"]
@@ -1121,54 +974,21 @@ class UMGTools:
         orientation    = args.get("orientation", "vertical")
         bar_thickness  = args.get("bar_thickness", 12.0)
 
-        script = dedent(f"""
-            import unreal, json
-            try:
-                widget_bp   = unreal.load_asset('{widget_path}')
-                widget_tree = widget_bp.widget_tree
-                sb = widget_tree.construct_widget(unreal.ScrollBox, unreal.Name('{name}'))
-                if sb:
+        extra = f"""
+                if widget:
                     try:
                         orient = unreal.Orientation.ORIENT_VERTICAL if '{orientation}' == 'vertical' else unreal.Orientation.ORIENT_HORIZONTAL
-                        sb.set_editor_property('orientation', orient)
+                        widget.set_editor_property('orientation', orient)
                     except Exception: pass
-                    try: sb.set_editor_property('scrollbar_thickness', unreal.Vector2D({bar_thickness}, {bar_thickness}))
+                    try: widget.set_editor_property('scrollbar_thickness', unreal.Vector2D({bar_thickness}, {bar_thickness}))
                     except Exception: pass
-
-                unreal.EditorAssetLibrary.save_asset(widget_bp.get_path_name(), only_if_is_dirty=False)
-                print('UEOS_RESULT:' + json.dumps({{
-                    'status': 'added', 'widget': '{name}', 'type': 'ScrollBox',
-                    'orientation': '{orientation}', 'widget_bp': '{widget_path}',
-                }}))
-            except SystemExit: pass
-            except Exception as e: print('UEOS_ERROR:' + json.dumps({{'error': str(e)}}))
-        """)
-        return await self._exec(script, "umg_add_scroll_box")
+        """
+        return await self._add_widget_node(args, "/Script/UMG.ScrollBox", extra_setup=extra)
 
     async def _add_canvas_panel(self, args: dict) -> list[types.TextContent]:
-        widget_path = args["widget_path"]
-        name        = args["name"]
-
-        script = dedent(f"""
-            import unreal, json
-            try:
-                widget_bp   = unreal.load_asset('{widget_path}')
-                widget_tree = widget_bp.widget_tree
-                cp = widget_tree.construct_widget(unreal.CanvasPanel, unreal.Name('{name}'))
-                if cp:
-                    try:
-                        widget_tree.set_editor_property('root_widget', cp)
-                    except Exception: pass
-
-                unreal.EditorAssetLibrary.save_asset(widget_bp.get_path_name(), only_if_is_dirty=False)
-                print('UEOS_RESULT:' + json.dumps({{
-                    'status': 'added', 'widget': '{name}', 'type': 'CanvasPanel',
-                    'as_root': True, 'widget_bp': '{widget_path}',
-                }}))
-            except SystemExit: pass
-            except Exception as e: print('UEOS_ERROR:' + json.dumps({{'error': str(e)}}))
-        """)
-        return await self._exec(script, "umg_add_canvas_panel")
+        # CanvasPanel is typically the root — C++ AddWidgetToDesigner auto-creates
+        # one if missing, so calling it with CanvasPanel just ensures it exists.
+        return await self._add_widget_node(args, "/Script/UMG.CanvasPanel")
 
     async def _add_horizontal_box(self, args: dict) -> list[types.TextContent]:
         return await self._add_generic_container(args, "HorizontalBox", "/Script/UMG.HorizontalBox")
@@ -1183,26 +1003,7 @@ class UMGTools:
         return await self._add_generic_container(args, "NamedSlot", "/Script/UMG.NamedSlot")
 
     async def _add_generic_container(self, args: dict, type_name: str, cls_path: str) -> list[types.TextContent]:
-        widget_path = args["widget_path"]
-        name        = args["name"]
-
-        script = dedent(f"""
-            import unreal, json
-            try:
-                widget_bp   = unreal.load_asset('{widget_path}')
-                widget_tree = widget_bp.widget_tree
-                cls = unreal.load_class(None, '{cls_path}')
-                container = widget_tree.construct_widget(cls, unreal.Name('{name}'))
-
-                unreal.EditorAssetLibrary.save_asset(widget_bp.get_path_name(), only_if_is_dirty=False)
-                print('UEOS_RESULT:' + json.dumps({{
-                    'status': 'added', 'widget': '{name}', 'type': '{type_name}',
-                    'widget_bp': '{widget_path}',
-                }}))
-            except SystemExit: pass
-            except Exception as e: print('UEOS_ERROR:' + json.dumps({{'error': str(e)}}))
-        """)
-        return await self._exec(script, f"umg_add_{type_name.lower()}")
+        return await self._add_widget_node(args, cls_path)
 
     async def _bind_variable(self, args: dict) -> list[types.TextContent]:
         widget_path   = args["widget_path"]
@@ -1376,51 +1177,51 @@ class UMGTools:
                     print('UEOS_ERROR:' + json.dumps({{'error': 'Failed to create HUD Widget Blueprint'}}))
                     raise SystemExit()
 
-                widget_tree = widget_bp.widget_tree
-
-                # 2. Add root CanvasPanel
-                canvas = widget_tree.construct_widget(unreal.CanvasPanel, unreal.Name('CanvasPanel_Root'))
-                try: widget_tree.set_editor_property('root_widget', canvas)
-                except Exception: pass
-
-                # 3. Add preset widgets
+                # 2. Add preset widgets via PhotonBPLibrary (bypasses Python widget_tree restriction)
                 widgets_config = {widgets_json}
                 added = []
 
-                type_cls_map = {{
-                    'text':        unreal.TextBlock,
-                    'button':      unreal.Button,
-                    'image':       unreal.Image,
-                    'progressbar': unreal.ProgressBar,
-                    'horizontal':  unreal.HorizontalBox,
-                    'scrollbox':   unreal.ScrollBox,
-                    'overlay':     unreal.Overlay,
-                    'namedslot':   unreal.NamedSlot,
-                    'border':      unreal.Border,
+                type_cls_name_map = {{
+                    'text':        'TextBlock',
+                    'button':      'Button',
+                    'image':       'Image',
+                    'progressbar': 'ProgressBar',
+                    'horizontal':  'HorizontalBox',
+                    'scrollbox':   'ScrollBox',
+                    'overlay':     'Overlay',
+                    'namedslot':   'NamedSlot',
+                    'border':      'Border',
+                    'canvaspanel': 'CanvasPanel',
                 }}
 
-                for w in widgets_config:
-                    wtype = w.get('type', 'text').lower()
-                    wname = w.get('name', 'Widget')
-                    wcls  = type_cls_map.get(wtype, unreal.TextBlock)
+                for idx, w in enumerate(widgets_config):
+                    wtype  = w.get('type', 'text').lower()
+                    wname  = w.get('name', f'Widget_{{idx}}')
+                    wcls   = type_cls_name_map.get(wtype, 'TextBlock')
+                    wpos   = w.get('position', [30, 30 + idx * 60])
+                    wsize  = w.get('size', [400, 40])
                     try:
-                        node = widget_tree.construct_widget(wcls, unreal.Name(wname))
-                        if node:
-                            # Set initial text for text/button
-                            if wtype == 'text' and 'text' in w:
-                                try: node.set_text(unreal.Text(w['text']))
-                                except Exception: pass
-                            if wtype == 'button' and 'label' in w:
-                                lbl = widget_tree.construct_widget(unreal.TextBlock, unreal.Name(wname + '_Label'))
-                                if lbl:
-                                    try: lbl.set_text(unreal.Text(w['label']))
-                                    except Exception: pass
-                                    try: node.set_content(lbl)
-                                    except Exception: pass
-                            if wtype == 'progressbar':
-                                try: node.set_editor_property('percent', 1.0)
-                                except Exception: pass
-                            added.append({{'name': wname, 'type': wtype}})
+                        slot_id = unreal.PhotonBPLibrary.add_widget_to_designer(
+                            widget_bp, wcls, wname,
+                            int(wpos[0]), int(wpos[1]),
+                            int(wsize[0]), int(wsize[1])
+                        )
+                        if slot_id:
+                            # Post-placement property setup via widget_tree.find_widget (best-effort)
+                            try:
+                                wt = widget_bp.widget_tree
+                                node = wt.find_widget(wname) if wt else None
+                                if node:
+                                    if wtype == 'text' and 'text' in w:
+                                        try: node.set_text(unreal.Text(w['text']))
+                                        except Exception: pass
+                                    if wtype == 'progressbar':
+                                        try: node.set_editor_property('percent', 1.0)
+                                        except Exception: pass
+                            except Exception: pass
+                            added.append({{'name': wname, 'type': wtype, 'slot_id': slot_id}})
+                        else:
+                            added.append({{'name': wname, 'type': wtype, 'error': 'add_widget_to_designer returned empty'}})
                     except Exception as we:
                         added.append({{'name': wname, 'type': wtype, 'error': str(we)}})
 

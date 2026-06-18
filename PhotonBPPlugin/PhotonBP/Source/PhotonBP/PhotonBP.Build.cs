@@ -20,6 +20,11 @@ public class PhotonBP : ModuleRules
 			"UnrealEd",
 			"EditorSubsystem",
 			"Kismet",
+			// UMG designer support
+			"UMG",
+			"UMGEditor",
+			"SlateCore",
+			"Slate",
 		});
 	}
 }

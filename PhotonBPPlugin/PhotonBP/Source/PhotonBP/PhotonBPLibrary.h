@@ -182,11 +182,35 @@ public:
 
 	/**
 	 * Get all node GUIDs and their types in a graph.
-	 * Returns JSON string: [{"guid":"...","type":"...","name":"..."}]
+	 * Returns JSON string: [{"guid":"...","type":"...","name":"...","x":0,"y":0,"pins":[...]}]
 	 */
 	UFUNCTION(BlueprintCallable, Category = "PhotonBP|Nodes")
 	static FString GetGraphNodes(
 		UBlueprint* Blueprint,
 		FString GraphName
+	);
+
+	// ── UMG Widget Designer ──────────────────────────────────────────────────
+
+	/**
+	 * Add a widget to a Widget Blueprint's designer canvas.
+	 * @param WidgetBlueprint   The Widget Blueprint asset (cast to UWidgetBlueprint internally)
+	 * @param WidgetClassName   e.g. "ProgressBar", "TextBlock", "Button", "Image"
+	 * @param WidgetName        Desired name for the new widget slot
+	 * @param PosX              Canvas position X (pixels from top-left)
+	 * @param PosY              Canvas position Y (pixels from top-left)
+	 * @param SizeX             Width in pixels
+	 * @param SizeY             Height in pixels
+	 * @return GUID string of the created widget slot, or empty string on failure
+	 */
+	UFUNCTION(BlueprintCallable, Category = "PhotonBP|UMG")
+	static FString AddWidgetToDesigner(
+		UBlueprint* WidgetBlueprint,
+		FString WidgetClassName,
+		FString WidgetName,
+		int32 PosX,
+		int32 PosY,
+		int32 SizeX,
+		int32 SizeY
 	);
 };

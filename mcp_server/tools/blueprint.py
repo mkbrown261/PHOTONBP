@@ -726,53 +726,67 @@ except Exception as e:
         bp_path    = args["blueprint_path"]
         graph      = args.get("graph", "EventGraph")
         node_type  = args.get("node_type", "")
+        # Track whether caller supplied explicit positions
+        has_x      = "position_x" in args
+        has_y      = "position_y" in args
         x          = int(args.get("position_x", 0))
         y          = int(args.get("position_y", 0))
 
-        # Build the PhotonBPLibrary call depending on node_type
+        # ── Duplicate-identity key ─────────────────────────────────────────────
+        # Used to detect an already-existing equivalent node so we never stack.
+        # Format: a string that uniquely identifies this logical node.
+        func        = args.get("function", "")
+        event_name  = args.get("event", func or "ReceiveBeginPlay")
+        var         = args.get("variable_name", func or "")
+        target      = args.get("target", "")
+        cls_map = {
+            "PrintString":          "KismetSystemLibrary",
+            "DrawDebugString":      "KismetSystemLibrary",
+            "GetGameInstance":      "GameplayStatics",
+            "GetPlayerPawn":        "GameplayStatics",
+            "GetPlayerController":  "GameplayStatics",
+            "SpawnActor":           "GameplayStatics",
+            "SpawnActorFromClass":  "GameplayStatics",
+            "ApplyDamage":          "GameplayStatics",
+            "GetAllActorsOfClass":  "GameplayStatics",
+        }
+        class_name = args.get("class_name", cls_map.get(func, target or "KismetSystemLibrary"))
+
+        # identity_fragment is matched against GetGraphNodes "name" field
+        if node_type in ("event", "custom_event"):
+            identity_fragment = event_name          # e.g. "ReceiveBeginPlay"
+        elif node_type == "function":
+            identity_fragment = func                # e.g. "PrintString"
+        elif node_type in ("variable_get", "variable_set"):
+            identity_fragment = var                 # e.g. "Health"
+        else:
+            identity_fragment = ""                  # branch/sequence/cast: never dedup
+
+        # ── Build the PhotonBPLibrary placement call ───────────────────────────
         if node_type == "custom_event":
-            event_name = args.get("event", args.get("function", "MyCustomEvent"))
-            call = f'unreal.PhotonBPLibrary.add_custom_event(bp, "{event_name}", {x}, {y})'
+            call = f'unreal.PhotonBPLibrary.add_custom_event(bp, "{event_name}", _x, _y)'
 
         elif node_type == "event":
-            event_name = args.get("event", "ReceiveBeginPlay")
-            call = f'unreal.PhotonBPLibrary.add_event_node(bp, "{graph}", "{event_name}", {x}, {y})'
+            call = f'unreal.PhotonBPLibrary.add_event_node(bp, "{graph}", "{event_name}", _x, _y)'
 
         elif node_type == "function":
-            func   = args.get("function", "")
-            target = args.get("target", "")
-            # target may be a class name (PrintString → KismetSystemLibrary)
-            cls_map = {
-                "PrintString":       "KismetSystemLibrary",
-                "DrawDebugString":   "KismetSystemLibrary",
-                "GetGameInstance":   "GameplayStatics",
-                "GetPlayerPawn":     "GameplayStatics",
-                "GetPlayerController": "GameplayStatics",
-                "SpawnActor":        "GameplayStatics",
-                "SpawnActorFromClass": "GameplayStatics",
-                "ApplyDamage":       "GameplayStatics",
-                "GetAllActorsOfClass": "GameplayStatics",
-            }
-            class_name = args.get("class_name", cls_map.get(func, target or "KismetSystemLibrary"))
-            call = f'unreal.PhotonBPLibrary.add_function_call_node(bp, "{graph}", "{class_name}", "{func}", {x}, {y})'
+            call = f'unreal.PhotonBPLibrary.add_function_call_node(bp, "{graph}", "{class_name}", "{func}", _x, _y)'
 
         elif node_type == "variable_get":
-            var = args.get("variable_name", args.get("function", ""))
-            call = f'unreal.PhotonBPLibrary.add_variable_get_node(bp, "{graph}", "{var}", {x}, {y})'
+            call = f'unreal.PhotonBPLibrary.add_variable_get_node(bp, "{graph}", "{var}", _x, _y)'
 
         elif node_type == "variable_set":
-            var = args.get("variable_name", args.get("function", ""))
-            call = f'unreal.PhotonBPLibrary.add_variable_set_node(bp, "{graph}", "{var}", {x}, {y})'
+            call = f'unreal.PhotonBPLibrary.add_variable_set_node(bp, "{graph}", "{var}", _x, _y)'
 
         elif node_type in ("branch", "if", "if_then_else"):
-            call = f'unreal.PhotonBPLibrary.add_branch_node(bp, "{graph}", {x}, {y})'
+            call = f'unreal.PhotonBPLibrary.add_branch_node(bp, "{graph}", _x, _y)'
 
         elif node_type == "sequence":
-            call = f'unreal.PhotonBPLibrary.add_sequence_node(bp, "{graph}", {x}, {y})'
+            call = f'unreal.PhotonBPLibrary.add_sequence_node(bp, "{graph}", _x, _y)'
 
         elif node_type == "cast":
             cls = args.get("class_name", args.get("target", ""))
-            call = f'unreal.PhotonBPLibrary.add_cast_node(bp, "{graph}", "{cls}", {x}, {y})'
+            call = f'unreal.PhotonBPLibrary.add_cast_node(bp, "{graph}", "{cls}", _x, _y)'
 
         else:
             return [types.TextContent(type="text", text=json.dumps({
@@ -784,6 +798,7 @@ except Exception as e:
                 )
             }, indent=2))]
 
+        # ── Python script — dedup check + auto-position + placement ───────────
         script = f"""
 import unreal, json, traceback
 try:
@@ -791,13 +806,75 @@ try:
     if bp is None:
         print("UEOS_ERROR:Blueprint not found: {bp_path}")
     else:
-        node_guid = {call}
-        if node_guid:
-            unreal.BlueprintEditorLibrary.compile_blueprint(bp)
-            unreal.EditorAssetLibrary.save_asset("{bp_path}")
-            print("UEOS_RESULT:" + json.dumps({{"status": "success", "node_id": node_guid, "node_type": "{node_type}", "graph": "{graph}", "blueprint": "{bp_path}"}}  ))
+        # ── Step 1: scan existing nodes for a duplicate ──────────────────────
+        existing_guid  = None
+        existing_nodes = json.loads(unreal.PhotonBPLibrary.get_graph_nodes(bp, "{graph}") or "[]")
+        identity       = "{identity_fragment}".lower()
+
+        if identity:
+            for n in existing_nodes:
+                node_name = n.get("name", "").lower()
+                node_type_str = n.get("type", "").lower()
+                # Match event nodes by their title containing the event name
+                if identity in node_name:
+                    # For variable_get vs variable_set, check UE node type string
+                    if "{node_type}" == "variable_get" and "get" not in node_type_str:
+                        continue
+                    if "{node_type}" == "variable_set" and "set" not in node_type_str:
+                        continue
+                    existing_guid = n["guid"]
+                    break
+
+        if existing_guid:
+            # Return the existing node — no duplicate created
+            print("UEOS_RESULT:" + json.dumps({{
+                "status":    "already_exists",
+                "node_id":   existing_guid,
+                "node_type": "{node_type}",
+                "graph":     "{graph}",
+                "blueprint": "{bp_path}",
+                "note":      "Returned existing node GUID — no duplicate created",
+            }}))
         else:
-            print("UEOS_ERROR:add node returned empty GUID — node_type={node_type}, graph={graph}")
+            # ── Step 2: auto-calculate position if not supplied ──────────────
+            # Spread nodes 400px apart in X, 200px rows every 8 nodes
+            # Caller-supplied positions always take priority.
+            _has_x = {str(has_x).lower()}
+            _has_y = {str(has_y).lower()}
+            if _has_x:
+                _x = {x}
+            else:
+                n_nodes = len(existing_nodes)
+                col     = n_nodes % 8          # wrap to new row every 8
+                row     = n_nodes // 8
+                _x      = col * 400
+                _y      = row * 250 if not _has_y else {y}
+
+            if _has_y:
+                _y = {y}
+            elif not _has_x:
+                pass  # _y already set above
+            else:
+                # x was supplied but y was not — keep y=0 unless nodes exist
+                n_nodes = len(existing_nodes)
+                row     = n_nodes // 8
+                _y      = row * 250
+
+            # ── Step 3: place the node ───────────────────────────────────────
+            node_guid = {call}
+            if node_guid:
+                unreal.BlueprintEditorLibrary.compile_blueprint(bp)
+                unreal.EditorAssetLibrary.save_asset("{bp_path}")
+                print("UEOS_RESULT:" + json.dumps({{
+                    "status":    "success",
+                    "node_id":   node_guid,
+                    "node_type": "{node_type}",
+                    "graph":     "{graph}",
+                    "blueprint": "{bp_path}",
+                    "position":  {{"x": _x, "y": _y}},
+                }}))
+            else:
+                print("UEOS_ERROR:add node returned empty GUID — node_type={node_type}, graph={graph}")
 except Exception as e:
     print("UEOS_ERROR:" + traceback.format_exc().replace("\\n", " | "))
 """
