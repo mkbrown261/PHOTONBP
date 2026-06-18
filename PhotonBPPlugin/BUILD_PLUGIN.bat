@@ -71,9 +71,7 @@ echo Building PhotonBP plugin...
 echo This takes 1-3 minutes. Do not close this window.
 echo.
 
-%UBT% -projectfiles -project="%PROJECT_FILE%" -game -rocket -progress
-
-%UBT% PhotonBPEditor Win64 Development -Project="%PROJECT_FILE%" -Plugin="%PLUGIN_DEST%\PhotonBP.uplugin" -Package="%~dp0Output\PhotonBP" -Rocket -TargetType=Editor
+%UBT% UnrealEditor Win64 Development -Project="%PROJECT_FILE%" -Plugin="%PLUGIN_DEST%\PhotonBP.uplugin" -Package="%~dp0Output\PhotonBP" -Rocket
 
 if %ERRORLEVEL% NEQ 0 (
     echo.
