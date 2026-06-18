@@ -262,6 +262,27 @@ async def list_tools() -> list[types.Tool]:
     ))
 
     tools.append(types.Tool(
+        name="ueos_screenshot",
+        description=(
+            "Take a screenshot of the active Unreal Engine viewport and return it as an image. "
+            "Claude will see the actual pixel output of the UE editor — the level, actors, "
+            "lighting, materials, exactly as they appear on screen. "
+            "Use this to visually inspect the scene, verify placements, check materials, "
+            "or get a visual status of the current level before making changes. "
+            "Returns an inline image Claude can see directly."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "width":  {"type": "integer", "description": "Screenshot width in pixels",  "default": 1920},
+                "height": {"type": "integer", "description": "Screenshot height in pixels", "default": 1080},
+                "note":   {"type": "string",  "description": "Optional label for the screenshot (logged only)"}
+            },
+            "required": []
+        }
+    ))
+
+    tools.append(types.Tool(
         name="ueos_batch_execute",
         description=(
             "Execute a list of Python snippets inside UE in sequence. "
@@ -437,6 +458,8 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
             return await handle_status()
         elif name == "ueos_diagnose":
             return await handle_diagnose()
+        elif name == "ueos_screenshot":
+            return await handle_screenshot(arguments)
         elif name == "ueos_run_python":
             return await handle_run_python(arguments)
         elif name == "ueos_batch_execute":
@@ -875,6 +898,153 @@ async def handle_diagnose() -> list[types.TextContent]:  # noqa: C901
         lines.append(f"  ❌  {verdict}")
 
     return [types.TextContent(type="text", text="\n".join(lines))]
+
+
+async def handle_screenshot(args: dict) -> list:
+    """
+    Take a viewport screenshot inside UE, read the PNG bytes via the bridge,
+    and return them as an MCP ImageContent so Claude can see the image inline.
+
+    Flow:
+      1. Python inside UE executes a HighResShot console command to a temp file
+      2. Python polls until the file appears on disk (max 8s)
+      3. Python reads the bytes, base64-encodes them, returns via UEOS_RESULT
+      4. MCP server decodes and returns types.ImageContent
+    """
+    import base64
+
+    width  = int(args.get("width",  1920))
+    height = int(args.get("height", 1080))
+
+    # Clamp to sane values — UE will hang on huge shots
+    width  = max(320, min(width,  3840))
+    height = max(240, min(height, 2160))
+
+    script = f"""
+import unreal, json, os, time, base64
+
+width  = {width}
+height = {height}
+
+# ── Step 1: resolve absolute project directory ─────────────────────────────
+# unreal.Paths returns paths RELATIVE to Engine/Binaries/Win64/ on Windows.
+# Strategy: use sys.executable (the UE Python interpreter) to anchor the path.
+# sys.executable is always an absolute path inside the UE install.
+import sys
+proj_file_rel = unreal.Paths.get_project_file_path().replace("\\\\\\\\", "/").replace("\\\\", "/")
+
+# sys.executable = C:/Program Files/Epic Games/UE_5.4/Engine/Binaries/Win64/python.exe
+# or similar — its directory IS Engine/Binaries/Win64
+exe_dir      = os.path.dirname(os.path.abspath(sys.executable))
+proj_abs     = os.path.normpath(os.path.join(exe_dir, proj_file_rel))
+proj_dir_abs = os.path.dirname(proj_abs)
+
+# Sanity check — if the resolved dir doesn't exist, try CWD as anchor
+if not os.path.isdir(proj_dir_abs):
+    proj_abs     = os.path.normpath(os.path.join(os.getcwd(), proj_file_rel))
+    proj_dir_abs = os.path.dirname(proj_abs)
+
+screenshots_dir = os.path.join(proj_dir_abs, "Saved", "Screenshots", "Windows")
+
+# ── Step 2: generate a unique filename ────────────────────────────────────
+ts       = int(time.time() * 1000)
+filename = f"ueos_shot_{{ts}}.png"
+filepath = os.path.join(screenshots_dir, filename)
+
+# Make sure the directory exists — UE creates it lazily
+os.makedirs(screenshots_dir, exist_ok=True)
+
+# ── Step 3: trigger the screenshot ────────────────────────────────────────
+world = unreal.EditorLevelLibrary.get_editor_world()
+cmd   = f"HighResShot {{width}}x{{height}} filename={{filepath}}"
+unreal.SystemLibrary.execute_console_command(world, cmd)
+
+# ── Step 4: poll for the file (UE writes async on next render frame) ──────
+deadline = time.time() + 10.0
+found    = False
+while time.time() < deadline:
+    if os.path.exists(filepath) and os.path.getsize(filepath) > 1024:
+        found = True
+        break
+    time.sleep(0.15)
+
+if not found:
+    # Try the simpler default screenshot path as fallback
+    default_dir = screenshots_dir
+    candidates  = []
+    if os.path.isdir(default_dir):
+        candidates = sorted(
+            [os.path.join(default_dir, f) for f in os.listdir(default_dir) if f.endswith(".png")],
+            key=os.path.getmtime, reverse=True
+        )
+    if candidates and (time.time() - os.path.getmtime(candidates[0])) < 15:
+        filepath = candidates[0]
+        found    = True
+
+if not found:
+    print("UEOS_ERROR:Screenshot file did not appear within 10 seconds at: " + filepath)
+else:
+    with open(filepath, "rb") as fh:
+        img_bytes = fh.read()
+    b64 = base64.b64encode(img_bytes).decode("ascii")
+    result = {{
+        "ok":       True,
+        "path":     filepath,
+        "width":    width,
+        "height":   height,
+        "size_kb":  len(img_bytes) // 1024,
+        "b64":      b64,
+    }}
+    print("UEOS_RESULT:" + json.dumps(result))
+"""
+
+    result = await ue.execute_python(script, timeout=20)
+    output = result.get("output", "")
+
+    # Parse UEOS_RESULT from output
+    shot_data = None
+    error_msg = None
+    for line in output.split("\n"):
+        line = line.strip()
+        if line.startswith("UEOS_RESULT:"):
+            try:
+                shot_data = json.loads(line[len("UEOS_RESULT:"):])
+            except Exception:
+                pass
+        elif line.startswith("UEOS_ERROR:"):
+            error_msg = line[len("UEOS_ERROR:"):]
+
+    if shot_data and shot_data.get("b64"):
+        log.info(f"Screenshot OK — {shot_data.get('size_kb', '?')}KB @ {shot_data.get('path', '?')}")
+        return [
+            types.ImageContent(
+                type="image",
+                data=shot_data["b64"],
+                mimeType="image/png",
+            ),
+            types.TextContent(
+                type="text",
+                text=(
+                    f"📸 Screenshot captured — {width}×{height}px, "
+                    f"{shot_data.get('size_kb', '?')}KB\n"
+                    f"Saved to: {shot_data.get('path', 'unknown')}"
+                )
+            ),
+        ]
+
+    # Failure path — return diagnostic text
+    return [types.TextContent(
+        type="text",
+        text=(
+            f"❌ Screenshot failed.\n"
+            f"Error: {error_msg or 'No UEOS_RESULT received'}\n"
+            f"Raw output: {output[:600]}\n\n"
+            f"Troubleshooting:\n"
+            f"  1. Make sure the UE viewport is visible (not minimized)\n"
+            f"  2. Run ueos_diagnose to confirm the bridge is working\n"
+            f"  3. Check UE Output Log for HighResShot errors"
+        )
+    )]
 
 
 async def handle_status() -> list[types.TextContent]:
