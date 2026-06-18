@@ -1,5 +1,5 @@
 # UEOS — Unreal Engine Operating System
-## System Prompt v2.2 | UE 5.4 | Blueprint Architecture
+## System Prompt v2.3 | UE 5.4 | Blueprint Architecture
 
 ---
 
@@ -974,6 +974,234 @@ SaveGame           /Script/Engine.SaveGame
 4. Fix the specific issue
 5. Retry
 6. If still failing, run ueos_diagnose to check all layers
+```
+
+---
+
+# PURE FUNCTIONS — NO EXEC PINS
+
+## What "pure" means in Blueprint
+A **pure function node** has NO white execution (exec) pins — no input `▶` and no output `▶ then`.
+It only has data pins.  
+You **cannot** wire `then → execute` to a pure node.  
+You **cannot** call `blueprint_connect_pins` between an exec pin and a pure node — it will error.
+
+## How to use a pure function
+Pure functions compute a value and return it via their output data pin.
+Wire their **output data pin** directly to the input data pin of the node that consumes it.
+
+```
+GetOwningPlayerPawn ──(Return Value / Object)──► CastToMyCharacter ──(As MyCharacter)──► GetHealth ──(Return Value float)──► Branch (Condition)
+```
+
+**Wrong:**
+```python
+# NEVER do this — exec pins do not exist on pure nodes
+blueprint_connect_pins(graph, then_pin_guid, pure_node_guid, "execute")
+```
+
+**Right:**
+```python
+# Pure node output flows directly into the next node's data input
+blueprint_connect_pins(graph, get_health_guid, "Return Value", branch_guid, "Condition")
+```
+
+## Common pure functions you will encounter
+
+| Function | Class | Returns | Note |
+|---|---|---|---|
+| `GetOwningPlayerPawn` | `GameplayStatics` | Pawn Object | Pure — no exec pins |
+| `GetPlayerCharacter` | `GameplayStatics` | Character Object | Pure |
+| `GetPlayerController` | `GameplayStatics` | PlayerController | Pure |
+| `GetHealth` / `GetMaxHealth` | your custom func | float | Pure if marked pure in BP |
+| `GetActorLocation` | `Actor` | Vector | Pure |
+| `GetActorRotation` | `Actor` | Rotator | Pure |
+| `GetVelocity` | `Actor` | Vector | Pure |
+| `IsValid` | `KismetSystemLibrary` | bool | Pure |
+| `MakeVector` | `KismetMathLibrary` | Vector | Pure |
+| `MakeRotator` | `KismetMathLibrary` | Rotator | Pure |
+| `VectorLength` / `VSize` | `KismetMathLibrary` | float | Pure |
+| `Add_FloatFloat` | `KismetMathLibrary` | float | Pure |
+| `Subtract_FloatFloat` | `KismetMathLibrary` | float | Pure |
+| `Multiply_FloatFloat` | `KismetMathLibrary` | float | Pure |
+| `Divide_FloatFloat` | `KismetMathLibrary` | float | Pure |
+| `SafeDivide` | `KismetMathLibrary` | float | Pure |
+| `FClamp` | `KismetMathLibrary` | float | Pure |
+| `Lerp` | `KismetMathLibrary` | float | Pure |
+| All comparison operators | `KismetMathLibrary` | bool | Pure (`Greater_FloatFloat`, etc.) |
+
+## Recognising pure nodes from GetGraphNodes output
+Pure nodes appear in the `nodes` array like any other node.
+Check their `pins` list — if there is **no pin named `execute` or `then`**, it is pure.
+
+```json
+{
+  "guid": "abc123",
+  "type": "K2Node_CallFunction",
+  "name": "GetOwningPlayerPawn",
+  "x": 200, "y": 0,
+  "pins": ["Player Index", "Return Value"]
+}
+```
+`Player Index` = data input. `Return Value` = data output. No exec pins → pure.
+
+---
+
+# KISMETMATHLIBRARY — MATH NODE REFERENCE
+
+All math functions live in `KismetMathLibrary` **not** `KismetSystemLibrary`.  
+Use the `func_name` exactly as listed below when calling `blueprint_add_node`.
+
+## Integer Math
+
+| `func_name` | Operation | Key Pins |
+|---|---|---|
+| `Add_IntInt` | A + B | A (int), B (int) → Return Value (int) |
+| `Subtract_IntInt` | A - B | A, B → Return Value |
+| `Multiply_IntInt` | A × B | A, B → Return Value |
+| `Divide_IntInt` | A ÷ B | A, B → Return Value |
+| `Abs_Int` | \|A\| | A → Return Value |
+| `Clamp` | clamp int | Value, Min, Max → Return Value |
+| `Min` | min(A,B) int | A, B → Return Value |
+| `Max` | max(A,B) int | A, B → Return Value |
+| `Modulo` | A % B | A, B → Return Value |
+
+## Float Math
+
+| `func_name` | Operation | Key Pins |
+|---|---|---|
+| `Add_FloatFloat` | A + B | A (float), B (float) → Return Value |
+| `Subtract_FloatFloat` | A - B | A, B → Return Value |
+| `Multiply_FloatFloat` | A × B | A, B → Return Value |
+| `Divide_FloatFloat` | A ÷ B | A, B → Return Value |
+| `SafeDivide` | A ÷ B (0-safe) | A, B → Return Value |
+| `FClamp` | clamp float | Value, Min, Max → Return Value |
+| `FMin` | min(A,B) | A, B → Return Value |
+| `FMax` | max(A,B) | A, B → Return Value |
+| `Abs` | \|A\| float | A → Return Value |
+| `FFloor` → `Floor` | floor | A → Return Value |
+| `FCeil` → `Ceil` | ceiling | A → Return Value |
+| `FRound` → `Round` | round | A → Return Value |
+| `Sqrt` | √A | A → Return Value |
+| `Square` | A² | A → Return Value |
+| `Exp` | eᴬ | A → Return Value |
+| `Loge` | ln(A) | A → Return Value |
+| `FMod` | A mod B | Dividend, Divisor → Return Value, Remainder |
+| `Lerp` | linear interp | A, B, Alpha → Return Value |
+| `FInterpTo` | smooth interp | Current, Target, DeltaTime, Speed → Return Value |
+| `FInterpConstantTo` | const rate interp | Current, Target, DeltaTime, Step → Return Value |
+| `MapRangeClamped` | map range | Value, InA, InB, OutA, OutB → Return Value |
+| `MapRangeUnclamped` | map range unclamped | same pins |
+| `NormalizeToRange` | normalize | Value, RangeMin, RangeMax → Return Value |
+| `Sin` | sin(rad) | A → Return Value |
+| `Cos` | cos(rad) | A → Return Value |
+| `Tan` | tan(rad) | A → Return Value |
+| `Asin` | arcsin | A → Return Value |
+| `Acos` | arccos | A → Return Value |
+| `Atan2` | atan2 | Y, X → Return Value |
+| `DegreesToRadians` | deg→rad | A → Return Value |
+| `RadiansToDegrees` | rad→deg | A → Return Value |
+| `Power` | A ^ Exp | Base, Exponent → Return Value |
+| `Log` | logBase(A) | A, Base → Return Value |
+
+## Comparison (all pure, return bool)
+
+| `func_name` | Operation |
+|---|---|
+| `Greater_FloatFloat` | A > B |
+| `Less_FloatFloat` | A < B |
+| `GreaterEqual_FloatFloat` | A >= B |
+| `LessEqual_FloatFloat` | A <= B |
+| `EqualEqual_FloatFloat` | A == B |
+| `NotEqual_FloatFloat` | A != B |
+| `Greater_IntInt` | A > B (int) |
+| `Less_IntInt` | A < B (int) |
+| `EqualEqual_IntInt` | A == B (int) |
+| `NotEqual_IntInt` | A != B (int) |
+| `EqualEqual_BoolBool` | A == B (bool) |
+| `NotEqual_BoolBool` | A != B (bool) |
+| `BooleanAND` | A AND B |
+| `BooleanOR` | A OR B |
+| `BooleanNOR` | A NOR B |
+| `BooleanNOT` | NOT A |
+| `BooleanXOR` | A XOR B |
+
+## Vector Math
+
+| `func_name` | Operation | Key Pins |
+|---|---|---|
+| `Add_VectorVector` | V + W | A (vector), B (vector) → Return Value |
+| `Subtract_VectorVector` | V - W | A, B → Return Value |
+| `Multiply_VectorFloat` | V × f | A (vector), B (float) → Return Value |
+| `Divide_VectorFloat` | V ÷ f | A, B → Return Value |
+| `VectorLength` | \|V\| | A → Return Value (float) |
+| `VSize` | alias for length | A → Return Value |
+| `Normalize` | V / \|V\| | A → Return Value (vector) |
+| `DotProduct` | V · W | A, B → Return Value (float) |
+| `CrossProduct` | V × W | A, B → Return Value (vector) |
+| `MakeVector` | construct | X, Y, Z → Return Value |
+| `BreakVector` | destruct | In Vector → X, Y, Z |
+| `GetForwardVector` | from rotation | InRot → Return Value |
+| `GetRightVector` | from rotation | InRot → Return Value |
+| `GetUpVector` | from rotation | InRot → Return Value |
+| `Distance` | dist(A,B) | V1, V2 → Return Value |
+| `FindLookAtRotation` | dir→rotator | Start, Target → Return Value |
+| `VLerp` | vector lerp | A, B, Alpha → Return Value |
+
+## Rotation / Transform
+
+| `func_name` | Operation | Key Pins |
+|---|---|---|
+| `MakeRotator` | construct | Roll, Pitch, Yaw → Return Value |
+| `BreakRotator` | destruct | InRot → Roll, Pitch, Yaw |
+| `ComposeRotators` | A + B rot | A, B → Return Value |
+| `NormalizeRotator` | clamp to ±180 | A → Return Value |
+| `RLerp` | rotator lerp | A, B, Alpha, bShortestPath → Return Value |
+| `MakeTransform` | construct | Location, Rotation, Scale → Return Value |
+| `BreakTransform` | destruct | InTransform → Location, Rotation, Scale |
+| `TransformLocation` | apply transform | T, Location → Return Value |
+| `InverseTransformLocation` | inverse | T, Location → Return Value |
+| `GetForwardVector` (rot) | forward dir | InRot → Return Value |
+
+## Boolean / Select
+
+| `func_name` | Operation | Key Pins |
+|---|---|---|
+| `SelectFloat` | ternary float | Condition, A, B → Return Value |
+| `SelectInt` | ternary int | Condition, A, B → Return Value |
+| `SelectVector` | ternary vector | Condition, A, B → Return Value |
+| `SelectObject` | ternary object | Condition, A, B → Return Value |
+| `SelectString` | ternary string | Condition, A, B → Return Value |
+
+## Type Conversion (all pure)
+
+| `func_name` | Converts |
+|---|---|
+| `Conv_IntToFloat` | int → float |
+| `Conv_FloatToInt` | float → int (truncate) |
+| `Conv_IntToBool` | int → bool |
+| `Conv_BoolToInt` | bool → int |
+| `Conv_FloatToString` | float → string |
+| `Conv_IntToString` | int → string |
+| `Conv_BoolToString` | bool → string |
+| `Conv_VectorToString` | vector → string |
+
+## Usage pattern — add_node for math
+
+```python
+# Add a SafeDivide node
+result = await blueprint_add_node(
+    blueprint_path="/Game/BP/BP_MyActor",
+    graph_name="EventGraph",
+    func_name="SafeDivide",
+    # class_name auto-resolved from cls_map — no need to supply
+    position_x=600,
+    position_y=0,
+)
+# result["guid"] is the node GUID
+# Wire: numerator_node "Return Value" → safedivide_guid "A"
+#        constant_node  "Return Value" → safedivide_guid "B"
+#        safedivide_guid "Return Value" → next_node "input_pin"
 ```
 
 ---
