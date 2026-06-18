@@ -894,7 +894,6 @@ async def handle_status() -> list[types.TextContent]:
             "version":     info.get("engineVersion", "?"),
             "project":     info.get("projectName", "?"),
             "content_dir": info.get("contentDir", "?"),
-            "_debug":      info.get("_debug", {}),
         })
     except Exception as e:
         status["unreal_engine"]["error"] = str(e)

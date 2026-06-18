@@ -296,74 +296,23 @@ class UnrealRemoteControl:
     async def get_engine_info(self) -> dict:
         """Get UE 5.4 version, project name, and paths."""
         script = """
-import unreal, json, os
-
-def _name_from_world():
-    \"\"\"Get project name from the currently open world — always correct.\"\"\"
-    try:
-        world = unreal.EditorLevelLibrary.get_editor_world()
-        if world:
-            # world.get_outer() is the WorldPackage whose name is /Game/Maps/Foo
-            # The persistent level package path starts with /Game — go up to get project
-            # Better: use the world's package path to find project root
-            pkg = world.get_package().get_path_name()  # e.g. /Game/Maps/MainMap
-            # pkg always starts with /Game — the project name is NOT here
-            # Instead read from the actual open .uproject on disk
-            pass
-    except Exception:
-        pass
-    return None
-
-def _name_from_uproject_file(proj_file_path):
-    \"\"\"Parse project name from the .uproject file path string.\"\"\"
-    try:
-        p = proj_file_path.replace("\\\\\\\\", "/").replace("\\\\", "/")
-        fname = p.split("/")[-1]
-        if fname.endswith(".uproject"):
-            return fname[:-len(".uproject")]
-    except Exception:
-        pass
-    return None
-
-def _name_from_dir_scan(proj_dir):
-    \"\"\"Scan the project directory for a .uproject file.\"\"\"
-    try:
-        d = proj_dir.replace("\\\\\\\\", "/").replace("\\\\", "/").rstrip("/")
-        for fname in os.listdir(d):
-            if fname.endswith(".uproject"):
-                return fname[:-len(".uproject")]
-    except Exception:
-        pass
-    return None
-
-def _name_from_content_dir(content_dir):
-    \"\"\"Derive project name from content dir path: .../ProjectName/Content/ -> ProjectName\"\"\"
-    try:
-        parts = content_dir.replace("\\\\\\\\", "/").replace("\\\\", "/").rstrip("/").split("/")
-        # Content dir is .../ProjectName/Content — project name is the folder before Content
-        if len(parts) >= 2 and parts[-1].lower() == "content":
-            return parts[-2]
-    except Exception:
-        pass
-    return None
+import unreal, json
 
 try:
-    proj_file    = unreal.Paths.get_project_file_path()
-    proj_dir     = unreal.Paths.project_dir()
-    content_dir  = unreal.Paths.project_content_dir()
+    proj_file   = unreal.Paths.get_project_file_path()
+    proj_dir    = unreal.Paths.project_dir()
+    content_dir = unreal.Paths.project_content_dir()
 
-    # Try 4 independent methods in order of reliability:
-    # 1. Dir scan — reads what's actually on disk in the project folder
-    proj_name = _name_from_dir_scan(proj_dir)
-    # 2. Content dir path — derive from .../ProjectName/Content/
-    if not proj_name:
-        proj_name = _name_from_content_dir(content_dir)
-    # 3. Parse the .uproject file path string
-    if not proj_name:
-        proj_name = _name_from_uproject_file(proj_file)
-    # 4. Last resort — folder name of project dir
-    if not proj_name:
-        proj_name = proj_dir.replace("\\\\\\\\", "/").replace("\\\\", "/").rstrip("/").split("/")[-1]
+    # NOTE: unreal.Paths returns relative paths (../../../../../../...) — this is normal UE behaviour.
+    # The .uproject FILENAME is always correct regardless of relative prefix — use it directly.
+    # Example: "../../../../../../Users/AVIAT/.../photonbptestproject/photonbptestproject.uproject"
+    #   → split on "/" → last element → "photonbptestproject.uproject" → strip suffix → "photonbptestproject"
+    def _parse_name(path):
+        p = path.replace("\\\\\\\\", "/").replace("\\\\", "/")
+        last = p.split("/")[-1]
+        return last[:-len(".uproject")] if last.endswith(".uproject") else last
+
+    proj_name = _parse_name(proj_file)
 
     info = {
         "engineVersion": str(unreal.SystemLibrary.get_engine_version()),
@@ -372,11 +321,6 @@ try:
         "projectDir":    proj_dir,
         "contentDir":    content_dir,
         "platform":      str(unreal.SystemLibrary.get_platform_name()),
-        "_debug": {
-            "proj_file":   proj_file,
-            "proj_dir":    proj_dir,
-            "content_dir": content_dir,
-        }
     }
     print("UEOS_INFO:" + json.dumps(info))
 except Exception as _e:
