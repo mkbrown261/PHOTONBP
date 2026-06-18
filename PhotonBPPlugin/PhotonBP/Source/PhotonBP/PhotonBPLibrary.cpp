@@ -8,6 +8,7 @@
 #include "Engine/Blueprint.h"
 #include "UObject/UnrealType.h"
 #include "UObject/UObjectGlobals.h"
+#include "Engine/UserDefinedStruct.h"
 
 // ─── Helper: build FEdGraphPinType from string args ──────────────────────────
 static FEdGraphPinType BuildPinType(
@@ -84,7 +85,13 @@ bool UPhotonBPLibrary::AddEventDispatcher(
 {
 	if (!Blueprint) return false;
 
-	FBlueprintEditorUtils::AddNewEventDispatcher(Blueprint, DispatcherName);
+	// Add dispatcher as a variable with delegate pin type
+	FBPVariableDescription NewVar;
+	NewVar.VarName = DispatcherName;
+	NewVar.VarType.PinCategory = UEdGraphSchema_K2::PC_MCDelegate;
+	NewVar.PropertyFlags |= CPF_BlueprintAssignable | CPF_BlueprintCallable;
+	Blueprint->NewVariables.Add(NewVar);
+
 	FBlueprintEditorUtils::MarkBlueprintAsModified(Blueprint);
 	return true;
 }
@@ -100,16 +107,8 @@ bool UPhotonBPLibrary::AddCustomEvent(
 	UEdGraph* EventGraph = FBlueprintEditorUtils::FindEventGraph(Blueprint);
 	if (!EventGraph) return false;
 
-	// Create the custom event node
-	UK2Node_CustomEvent* CustomEventNode = FKismetEditorUtilities::AddDefaultEventNode(
-		Blueprint,
-		EventGraph,
-		EventName,
-		UK2Node_CustomEvent::StaticClass(),
-		0
-	);
-
-	if (!CustomEventNode)
+	// Create the custom event node directly
+	UK2Node_CustomEvent* CustomEventNode = nullptr;
 	{
 		// Fallback: create node directly
 		CustomEventNode = NewObject<UK2Node_CustomEvent>(EventGraph);
