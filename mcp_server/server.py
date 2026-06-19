@@ -1184,7 +1184,9 @@ async def handle_working_tools() -> list[types.TextContent]:  # noqa: C901
     # NO `import unreal` — unreal is pre-injected by the bridge.
     # Every attribute access uses getattr(unreal,"X",None) — never unreal.X directly.
     SCRIPT = (
-        "import json\n"
+        # NO imports — json is pre-injected by the bridge; unreal is pre-injected.
+        # Use print() not sys.stdout.write() — sys is NOT injected into exec globals.
+        # print() routes through the captured sys.stdout automatically.
         "def chk(group, pairs):\n"
         "    bad=[k for k,v in pairs if not v]\n"
         "    print('PASS:'+group if not bad else 'FAIL:'+group+':'+json.dumps(bad))\n"

@@ -68,7 +68,9 @@ class PhotonExecBridge(unreal.Object):
             # "import unreal" will shadow this injected binding — safe because
             # unreal is already in sys.modules and won't re-run module code.
             import json as _json_mod
-            exec(script, {"unreal": unreal, "json": _json_mod})  # noqa: S102
+            # Inject sys explicitly so scripts can use sys.stdout.write() directly
+            # against the already-redirected buf — bypasses any UE print() override.
+            exec(script, {"unreal": unreal, "json": _json_mod, "sys": sys})  # noqa: S102
         except Exception:
             err_msg = traceback.format_exc()
         finally:
