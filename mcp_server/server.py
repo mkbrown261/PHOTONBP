@@ -1352,13 +1352,14 @@ async def handle_working_tools() -> list[types.TextContent]:  # noqa: C901
             group = parts[1]
             broken = json.loads(parts[2]) if len(parts) == 3 else ["parse_error"]
             raw[group] = {"ok": False, "broken": broken}
+        elif ln.startswith("CRASH:"):
+            parts = ln.split(":", 2)
+            group = parts[1] if len(parts) > 1 else "unknown"
+            msg = parts[2] if len(parts) > 2 else "no message"
+            raw[group] = {"ok": False, "broken": [f"CRASH: {msg}"]}
 
-    # If nothing parsed, return raw output so we can see what UE actually said
-    if not raw:
-        return [types.TextContent(type="text", text=(
-            "ueos_wt: no PASS/FAIL lines in output\n"
-            f"Raw output:\n{output[:800] or '(empty)'}"
-        ))]
+    # Always include raw output at the bottom for debugging
+    raw["_raw_output"] = {"ok": True, "broken": [], "_raw": output[:600] or "(empty)"}
 
     # ── Build report ──────────────────────────────────────────────────────────
     EXPECTED = ["core","blueprint","data","scene","animation",
@@ -1389,6 +1390,9 @@ async def handle_working_tools() -> list[types.TextContent]:  # noqa: C901
         lines.append("  FAILURES DETECTED — broken APIs listed above")
         lines.append("  XX PhotonBPLibrary -> rebuild plugin + restart UE")
         lines.append("  XX Python class missing -> check plugin enabled")
+    lines.append("=======================================================")
+    lines.append("  RAW BRIDGE OUTPUT:")
+    lines.append(raw.get("_raw_output", {}).get("_raw", "(not captured)"))
     lines.append("=======================================================")
 
     return [types.TextContent(type="text", text="\n".join(lines))]
