@@ -139,8 +139,8 @@ bool UPhotonBPLibrary::AddStructField(
 
 	FGuid NewVarGuid = VarDesc.Last().VarGuid;
 
-	// Rename it to the requested name
-	FStructureEditorUtils::RenameVariable(Struct, NewVarGuid, FieldName);
+	// Rename it to the requested name — RenameVariable takes FString, not FName
+	FStructureEditorUtils::RenameVariable(Struct, NewVarGuid, FieldName.ToString());
 
 	// Notify the editor that the struct layout changed
 	FStructureEditorUtils::OnStructureChanged(Struct,
