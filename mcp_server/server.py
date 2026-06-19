@@ -1190,7 +1190,10 @@ async def handle_working_tools() -> list[types.TextContent]:  # noqa: C901
         "def chk(group, pairs):\n"
         "    try:\n"
         "        bad=[k for k,v in pairs if not v]\n"
-        "        print('PASS:'+group if not bad else 'FAIL:'+group+':'+json.dumps(bad))\n"
+        "        if not bad:\n"
+        "            print('PASS:'+group)\n"
+        "        else:\n"
+        "            print('FAIL:'+group+':|'+'|'.join(bad))\n"
         "    except Exception as _e:\n"
         "        print('CRASH:'+group+':'+str(_e))\n"
         "\n"
@@ -1350,8 +1353,8 @@ async def handle_working_tools() -> list[types.TextContent]:  # noqa: C901
         elif ln.startswith("FAIL:"):
             parts = ln.split(":", 2)
             group = parts[1]
-            broken = json.loads(parts[2]) if len(parts) == 3 else ["parse_error"]
-            raw[group] = {"ok": False, "broken": broken}
+            broken = parts[2].split("|") if len(parts) == 3 else ["parse_error"]
+            raw[group] = {"ok": False, "broken": [b for b in broken if b]}
         elif ln.startswith("CRASH:"):
             parts = ln.split(":", 2)
             group = parts[1] if len(parts) > 1 else "unknown"
