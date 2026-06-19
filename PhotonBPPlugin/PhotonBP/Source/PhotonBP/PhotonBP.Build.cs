@@ -34,8 +34,7 @@ public class PhotonBP : ModuleRules
 			// Animation BP
 			"AnimGraph",
 			"AnimGraphRuntime",
-			// Editor save utils
-			"EditorFramework",
+			// Editor save utils (FileHelpers.h is in UnrealEd)
 		});
 	}
 }

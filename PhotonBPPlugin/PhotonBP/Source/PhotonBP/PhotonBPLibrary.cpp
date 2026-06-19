@@ -52,7 +52,7 @@
 #include "AssetToolsModule.h"
 #include "IAssetTools.h"
 #include "Factories/Factory.h"
-#include "EditorLoadingAndSavingUtils.h"
+#include "FileHelpers.h"
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
@@ -946,7 +946,7 @@ FString UPhotonBPLibrary::CreateInputAction(FString AssetName, FString SavePath)
 	{
 		TArray<UPackage*> PackagesToSave;
 		PackagesToSave.Add(Package);
-		UEditorLoadingAndSavingUtils::SavePackages(PackagesToSave, true);
+		FEditorFileUtils::PromptForCheckoutAndSave(PackagesToSave, false, false);
 	}
 	return AssetPath;
 }
@@ -971,7 +971,7 @@ FString UPhotonBPLibrary::CreateInputMappingContext(FString AssetName, FString S
 	{
 		TArray<UPackage*> PackagesToSave;
 		PackagesToSave.Add(Package);
-		UEditorLoadingAndSavingUtils::SavePackages(PackagesToSave, true);
+		FEditorFileUtils::PromptForCheckoutAndSave(PackagesToSave, false, false);
 	}
 	return AssetPath;
 }
@@ -1000,7 +1000,7 @@ FString UPhotonBPLibrary::CreatePCGGraph(FString AssetName, FString SavePath)
 	{
 		TArray<UPackage*> PackagesToSave;
 		PackagesToSave.Add(Package);
-		UEditorLoadingAndSavingUtils::SavePackages(PackagesToSave, true);
+		FEditorFileUtils::PromptForCheckoutAndSave(PackagesToSave, false, false);
 	}
 	return AssetPath;
 }
