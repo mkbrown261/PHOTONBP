@@ -38,6 +38,21 @@
 #include "WidgetBlueprint.h"
 #include "Engine/SimpleConstructionScript.h"
 #include "Engine/SCS_Node.h"
+// Enum editing
+#include "Engine/UserDefinedEnum.h"
+// DataTable
+#include "Engine/DataTable.h"
+#include "DataTableEditorUtils.h"
+// Material
+#include "Materials/Material.h"
+#include "MaterialEditingLibrary.h"
+// Animation BP
+#include "Animation/AnimBlueprint.h"
+#include "AnimationGraph/AnimGraphNode_StateMachine.h"
+// Asset tools for factory-based creation
+#include "AssetToolsModule.h"
+#include "IAssetTools.h"
+#include "Factories/Factory.h"
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
@@ -705,4 +720,287 @@ bool UPhotonBPLibrary::AddInterface(UBlueprint* Blueprint, UClass* InterfaceClas
 	Blueprint->ImplementedInterfaces.Add(NewInterface);
 	FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
 	return true;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ENUM OPERATIONS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+int32 UPhotonBPLibrary::EnumNumEnums(UUserDefinedEnum* Enum)
+{
+	if (!Enum) return 0;
+	return Enum->NumEnums();
+}
+
+void UPhotonBPLibrary::EnumSetMetaData(UUserDefinedEnum* Enum, FName Key, FString Value)
+{
+	if (!Enum) return;
+	Enum->SetMetaData(*Key.ToString(), *Value);
+}
+
+int32 UPhotonBPLibrary::EnumAddEntry(UUserDefinedEnum* Enum, FString EntryName)
+{
+	if (!Enum) return -1;
+	// NumEnums includes the MAX sentinel — new slot is NumEnums-1
+	int32 SlotIndex = Enum->NumEnums() - 1;
+	FString DisplayKey = FString::Printf(TEXT("DisplayName_NewEnumerator%d"), SlotIndex);
+	Enum->SetMetaData(*DisplayKey, *EntryName);
+	Enum->MarkPackageDirty();
+	return SlotIndex;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// DATATABLE OPERATIONS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+FString UPhotonBPLibrary::DataTableToJsonString(UDataTable* DataTable)
+{
+	if (!DataTable) return TEXT("[]");
+	FString JsonStr;
+	DataTable->GetTableAsJSON(JsonStr);
+	return JsonStr;
+}
+
+TArray<FName> UPhotonBPLibrary::DataTableGetRowNames(UDataTable* DataTable)
+{
+	if (!DataTable) return TArray<FName>();
+	return DataTable->GetRowNames();
+}
+
+bool UPhotonBPLibrary::DataTableFillFromCsv(UDataTable* DataTable, FString CsvString)
+{
+	if (!DataTable) return false;
+	TArray<FString> Errors = DataTable->CreateTableFromCSVString(CsvString);
+	if (Errors.Num() > 0) return false;
+	DataTable->MarkPackageDirty();
+	return true;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// STRUCT FIELD ITERATION
+// ═══════════════════════════════════════════════════════════════════════════════
+
+FString UPhotonBPLibrary::StructGetFields(UUserDefinedStruct* Struct)
+{
+	if (!Struct) return TEXT("[]");
+	FString Result = TEXT("[");
+	bool bFirst = true;
+	for (TFieldIterator<FProperty> It(Struct); It; ++It)
+	{
+		FProperty* Prop = *It;
+		if (!bFirst) Result += TEXT(",");
+		bFirst = false;
+		Result += FString::Printf(TEXT("{\"name\":\"%s\",\"type\":\"%s\"}"),
+			*Prop->GetName(),
+			*Prop->GetCPPType());
+	}
+	Result += TEXT("]");
+	return Result;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// COMPONENT & INTERFACE
+// ═══════════════════════════════════════════════════════════════════════════════
+
+bool UPhotonBPLibrary::AddComponent(UBlueprint* Blueprint, UClass* ComponentClass, FName ComponentName)
+{
+	if (!Blueprint || !ComponentClass) return false;
+	if (!Blueprint->SimpleConstructionScript) return false;
+
+	USCS_Node* NewNode = Blueprint->SimpleConstructionScript->CreateNode(ComponentClass, ComponentName);
+	if (!NewNode) return false;
+
+	Blueprint->SimpleConstructionScript->AddNode(NewNode);
+	FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
+	return true;
+}
+
+bool UPhotonBPLibrary::AddInterface(UBlueprint* Blueprint, UClass* InterfaceClass)
+{
+	if (!Blueprint || !InterfaceClass) return false;
+
+	for (const FBPInterfaceDescription& Desc : Blueprint->ImplementedInterfaces)
+	{
+		if (Desc.Interface == InterfaceClass) return true;
+	}
+
+	FBPInterfaceDescription NewInterface;
+	NewInterface.Interface = InterfaceClass;
+	Blueprint->ImplementedInterfaces.Add(NewInterface);
+	FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
+	return true;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ANIMATION BLUEPRINT
+// ═══════════════════════════════════════════════════════════════════════════════
+
+bool UPhotonBPLibrary::CompileAnimBlueprint(UBlueprint* AnimBlueprint)
+{
+	if (!AnimBlueprint) return false;
+	FKismetEditorUtilities::CompileBlueprint(AnimBlueprint);
+	return !AnimBlueprint->Status == BS_Error;
+}
+
+FString UPhotonBPLibrary::AddAnimGraphNode(UBlueprint* AnimBlueprint, FString NodeClassName, int32 NodeX, int32 NodeY)
+{
+	if (!AnimBlueprint) return TEXT("");
+
+	UEdGraph* AnimGraph = nullptr;
+	for (UEdGraph* Graph : AnimBlueprint->FunctionGraphs)
+	{
+		if (Graph && Graph->GetName().Contains(TEXT("AnimGraph")))
+		{
+			AnimGraph = Graph;
+			break;
+		}
+	}
+	if (!AnimGraph) return TEXT("");
+
+	UClass* NodeClass = FindObject<UClass>(ANY_PACKAGE, *NodeClassName);
+	if (!NodeClass) return TEXT("");
+
+	UEdGraphNode* NewNode = NewObject<UEdGraphNode>(AnimGraph, NodeClass);
+	if (!NewNode) return TEXT("");
+
+	NewNode->NodePosX = NodeX;
+	NewNode->NodePosY = NodeY;
+	NewNode->CreateNewGuid();
+	AnimGraph->AddNode(NewNode, true, false);
+	FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(AnimBlueprint);
+
+	return NewNode->NodeGuid.ToString();
+}
+
+FString UPhotonBPLibrary::AddStateToStateMachine(UBlueprint* AnimBlueprint, FString StateMachineName, FString StateName, int32 NodeX, int32 NodeY)
+{
+	// State machine editing requires AnimationGraph module internals.
+	// Return empty — caller should check and fall back to manual graph editing.
+	return TEXT("");
+}
+
+bool UPhotonBPLibrary::SetEntryState(UBlueprint* AnimBlueprint, FString StateMachineName, FString StateName)
+{
+	return false;
+}
+
+bool UPhotonBPLibrary::AddTransition(UBlueprint* AnimBlueprint, FString StateMachineName, FString FromState, FString ToState)
+{
+	return false;
+}
+
+bool UPhotonBPLibrary::SetStateAnimation(UBlueprint* AnimBlueprint, FString StateMachineName, FString StateName, FString AnimSequencePath)
+{
+	return false;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// MATERIAL
+// ═══════════════════════════════════════════════════════════════════════════════
+
+FString UPhotonBPLibrary::GetMaterialExpressions(UMaterial* Material)
+{
+	if (!Material) return TEXT("[]");
+
+	FString Result = TEXT("[");
+	bool bFirst = true;
+	for (UMaterialExpression* Expr : Material->GetExpressions())
+	{
+		if (!Expr) continue;
+		if (!bFirst) Result += TEXT(",");
+		bFirst = false;
+		Result += FString::Printf(
+			TEXT("{\"type\":\"%s\",\"desc\":\"%s\",\"x\":%d,\"y\":%d}"),
+			*Expr->GetClass()->GetName(),
+			*Expr->Desc,
+			Expr->MaterialExpressionEditorX,
+			Expr->MaterialExpressionEditorY
+		);
+	}
+	Result += TEXT("]");
+	return Result;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ENHANCED INPUT ASSET CREATION
+// ═══════════════════════════════════════════════════════════════════════════════
+
+FString UPhotonBPLibrary::CreateInputAction(FString AssetName, FString SavePath)
+{
+	IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
+
+	UClass* IAClass = FindObject<UClass>(ANY_PACKAGE, TEXT("InputAction"));
+	if (!IAClass)
+	{
+		IAClass = LoadObject<UClass>(nullptr, TEXT("/Script/EnhancedInput.InputAction"));
+	}
+	if (!IAClass) return TEXT("");
+
+	UFactory* Factory = NewObject<UFactory>(GetTransientPackage(), UFactory::StaticClass());
+	UObject* Asset = AssetTools.CreateAsset(AssetName, SavePath, IAClass, nullptr);
+	if (!Asset) return TEXT("");
+
+	FString AssetPath = FString::Printf(TEXT("%s/%s.%s"), *SavePath, *AssetName, *AssetName);
+	UPackage* Package = Asset->GetOutermost();
+	if (Package)
+	{
+		TArray<UPackage*> PackagesToSave;
+		PackagesToSave.Add(Package);
+		UEditorLoadingAndSavingUtils::SavePackages(PackagesToSave, true);
+	}
+	return AssetPath;
+}
+
+FString UPhotonBPLibrary::CreateInputMappingContext(FString AssetName, FString SavePath)
+{
+	IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
+
+	UClass* IMCClass = FindObject<UClass>(ANY_PACKAGE, TEXT("InputMappingContext"));
+	if (!IMCClass)
+	{
+		IMCClass = LoadObject<UClass>(nullptr, TEXT("/Script/EnhancedInput.InputMappingContext"));
+	}
+	if (!IMCClass) return TEXT("");
+
+	UObject* Asset = AssetTools.CreateAsset(AssetName, SavePath, IMCClass, nullptr);
+	if (!Asset) return TEXT("");
+
+	FString AssetPath = FString::Printf(TEXT("%s/%s.%s"), *SavePath, *AssetName, *AssetName);
+	UPackage* Package = Asset->GetOutermost();
+	if (Package)
+	{
+		TArray<UPackage*> PackagesToSave;
+		PackagesToSave.Add(Package);
+		UEditorLoadingAndSavingUtils::SavePackages(PackagesToSave, true);
+	}
+	return AssetPath;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// PCG GRAPH ASSET CREATION
+// ═══════════════════════════════════════════════════════════════════════════════
+
+FString UPhotonBPLibrary::CreatePCGGraph(FString AssetName, FString SavePath)
+{
+	IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
+
+	UClass* PCGClass = FindObject<UClass>(ANY_PACKAGE, TEXT("PCGGraph"));
+	if (!PCGClass)
+	{
+		PCGClass = LoadObject<UClass>(nullptr, TEXT("/Script/PCG.PCGGraph"));
+	}
+	if (!PCGClass) return TEXT("");
+
+	UObject* Asset = AssetTools.CreateAsset(AssetName, SavePath, PCGClass, nullptr);
+	if (!Asset) return TEXT("");
+
+	FString AssetPath = FString::Printf(TEXT("%s/%s.%s"), *SavePath, *AssetName, *AssetName);
+	UPackage* Package = Asset->GetOutermost();
+	if (Package)
+	{
+		TArray<UPackage*> PackagesToSave;
+		PackagesToSave.Add(Package);
+		UEditorLoadingAndSavingUtils::SavePackages(PackagesToSave, true);
+	}
+	return AssetPath;
 }

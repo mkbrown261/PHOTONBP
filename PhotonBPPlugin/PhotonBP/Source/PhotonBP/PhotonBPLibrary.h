@@ -5,6 +5,7 @@
 #include "Engine/Blueprint.h"
 #include "EdGraph/EdGraphPin.h"
 #include "Engine/UserDefinedStruct.h"
+#include "Engine/UserDefinedEnum.h"
 #include "PhotonBPLibrary.generated.h"
 
 UCLASS()
@@ -41,15 +42,6 @@ public:
 
 	// ── Struct Field Creation ────────────────────────────────────────────────
 
-	/**
-	 * Add a typed field to a UserDefinedStruct asset.
-	 * @param Struct                  The UserDefinedStruct asset
-	 * @param FieldName               Name for the new field
-	 * @param PinCategory             e.g. "bool","int","real","string","name","struct","object"
-	 * @param PinSubCategory          e.g. "float","double" (for real), or "" for others
-	 * @param PinSubCategoryObjectPath e.g. "/Script/CoreUObject.Vector" or "" for primitives
-	 * @return True on success
-	 */
 	UFUNCTION(BlueprintCallable, Category = "PhotonBP|Structs")
 	static bool AddStructField(
 		UUserDefinedStruct* Struct,
@@ -59,12 +51,43 @@ public:
 		FString PinSubCategoryObjectPath
 	);
 
+	// ── Enum Operations ──────────────────────────────────────────────────────
+
+	/** Returns the number of enum entries (including the MAX sentinel). */
+	UFUNCTION(BlueprintCallable, Category = "PhotonBP|Enums")
+	static int32 EnumNumEnums(UUserDefinedEnum* Enum);
+
+	/** Set metadata on an enum (e.g. DisplayName_NewEnumerator0 = "MyValue"). */
+	UFUNCTION(BlueprintCallable, Category = "PhotonBP|Enums")
+	static void EnumSetMetaData(UUserDefinedEnum* Enum, FName Key, FString Value);
+
+	/** Add a new enumerator entry and return its slot index. */
+	UFUNCTION(BlueprintCallable, Category = "PhotonBP|Enums")
+	static int32 EnumAddEntry(UUserDefinedEnum* Enum, FString EntryName);
+
+	// ── DataTable Operations ─────────────────────────────────────────────────
+
+	/** Convert a DataTable asset to a JSON string. */
+	UFUNCTION(BlueprintCallable, Category = "PhotonBP|DataTable")
+	static FString DataTableToJsonString(UDataTable* DataTable);
+
+	/** Get all row names from a DataTable. */
+	UFUNCTION(BlueprintCallable, Category = "PhotonBP|DataTable")
+	static TArray<FName> DataTableGetRowNames(UDataTable* DataTable);
+
+	/** Fill a DataTable from a CSV string. Returns true on success. */
+	UFUNCTION(BlueprintCallable, Category = "PhotonBP|DataTable")
+	static bool DataTableFillFromCsv(UDataTable* DataTable, FString CsvString);
+
+	// ── Struct Field Iteration ───────────────────────────────────────────────
+
+	/** Get all field names and types from a UserDefinedStruct as JSON string.
+	 *  Returns: [{"name":"FieldName","type":"float"}, ...] */
+	UFUNCTION(BlueprintCallable, Category = "PhotonBP|Structs")
+	static FString StructGetFields(UUserDefinedStruct* Struct);
+
 	// ── Node Creation ────────────────────────────────────────────────────────
 
-	/**
-	 * Add a Custom Event node to the EventGraph.
-	 * Returns the node GUID string for use in ConnectPins.
-	 */
 	UFUNCTION(BlueprintCallable, Category = "PhotonBP|Nodes")
 	static FString AddCustomEvent(
 		UBlueprint* Blueprint,
@@ -73,10 +96,6 @@ public:
 		int32 NodeY
 	);
 
-	/**
-	 * Add a standard event node (e.g. ReceiveBeginPlay, ReceiveTick).
-	 * Returns node GUID string.
-	 */
 	UFUNCTION(BlueprintCallable, Category = "PhotonBP|Nodes")
 	static FString AddEventNode(
 		UBlueprint* Blueprint,
@@ -86,12 +105,6 @@ public:
 		int32 NodeY
 	);
 
-	/**
-	 * Add a function call node.
-	 * @param ClassName		e.g. "KismetSystemLibrary"
-	 * @param FunctionName	e.g. "PrintString"
-	 * Returns node GUID string.
-	 */
 	UFUNCTION(BlueprintCallable, Category = "PhotonBP|Nodes")
 	static FString AddFunctionCallNode(
 		UBlueprint* Blueprint,
@@ -102,10 +115,6 @@ public:
 		int32 NodeY
 	);
 
-	/**
-	 * Add a variable GET node.
-	 * Returns node GUID string.
-	 */
 	UFUNCTION(BlueprintCallable, Category = "PhotonBP|Nodes")
 	static FString AddVariableGetNode(
 		UBlueprint* Blueprint,
@@ -115,10 +124,6 @@ public:
 		int32 NodeY
 	);
 
-	/**
-	 * Add a variable SET node.
-	 * Returns node GUID string.
-	 */
 	UFUNCTION(BlueprintCallable, Category = "PhotonBP|Nodes")
 	static FString AddVariableSetNode(
 		UBlueprint* Blueprint,
@@ -128,10 +133,6 @@ public:
 		int32 NodeY
 	);
 
-	/**
-	 * Add a Branch (if/then/else) node.
-	 * Returns node GUID string.
-	 */
 	UFUNCTION(BlueprintCallable, Category = "PhotonBP|Nodes")
 	static FString AddBranchNode(
 		UBlueprint* Blueprint,
@@ -140,10 +141,6 @@ public:
 		int32 NodeY
 	);
 
-	/**
-	 * Add a Sequence node.
-	 * Returns node GUID string.
-	 */
 	UFUNCTION(BlueprintCallable, Category = "PhotonBP|Nodes")
 	static FString AddSequenceNode(
 		UBlueprint* Blueprint,
@@ -152,11 +149,6 @@ public:
 		int32 NodeY
 	);
 
-	/**
-	 * Add a Cast node.
-	 * @param TargetClassName	e.g. "ACharacter"
-	 * Returns node GUID string.
-	 */
 	UFUNCTION(BlueprintCallable, Category = "PhotonBP|Nodes")
 	static FString AddCastNode(
 		UBlueprint* Blueprint,
@@ -168,14 +160,6 @@ public:
 
 	// ── Pin Connection ───────────────────────────────────────────────────────
 
-	/**
-	 * Connect two pins between nodes in a graph.
-	 * @param FromNodeGuid	GUID string returned from Add*Node
-	 * @param FromPinName	e.g. "then", "ReturnValue", "Value"
-	 * @param ToNodeGuid	GUID string returned from Add*Node
-	 * @param ToPinName		e.g. "execute", "Condition", "NewValue"
-	 * @return True if connection succeeded
-	 */
 	UFUNCTION(BlueprintCallable, Category = "PhotonBP|Pins")
 	static bool ConnectPins(
 		UBlueprint* Blueprint,
@@ -186,12 +170,6 @@ public:
 		FString ToPinName
 	);
 
-	/**
-	 * Set a literal value on a pin (for input pins with no connection).
-	 * @param NodeGuid		GUID of the node
-	 * @param PinName		Name of the pin
-	 * @param Value			String representation of the value
-	 */
 	UFUNCTION(BlueprintCallable, Category = "PhotonBP|Pins")
 	static bool SetPinDefaultValue(
 		UBlueprint* Blueprint,
@@ -201,10 +179,6 @@ public:
 		FString Value
 	);
 
-	/**
-	 * Get all node GUIDs and their types in a graph.
-	 * Returns JSON string: [{"guid":"...","type":"...","name":"...","x":0,"y":0,"pins":[...]}]
-	 */
 	UFUNCTION(BlueprintCallable, Category = "PhotonBP|Nodes")
 	static FString GetGraphNodes(
 		UBlueprint* Blueprint,
@@ -213,13 +187,6 @@ public:
 
 	// ── Component & Interface ────────────────────────────────────────────────
 
-	/**
-	 * Add a component to a Blueprint's SimpleConstructionScript.
-	 * @param Blueprint         The Blueprint asset
-	 * @param ComponentClass    The component class (e.g. UBoxComponent)
-	 * @param ComponentName     Name for the new component
-	 * @return True on success
-	 */
 	UFUNCTION(BlueprintCallable, Category = "PhotonBP|Components")
 	static bool AddComponent(
 		UBlueprint* Blueprint,
@@ -227,31 +194,87 @@ public:
 		FName ComponentName
 	);
 
-	/**
-	 * Add an interface to a Blueprint.
-	 * @param Blueprint         The Blueprint asset
-	 * @param InterfaceClass    The interface class to implement
-	 * @return True on success
-	 */
 	UFUNCTION(BlueprintCallable, Category = "PhotonBP|Components")
 	static bool AddInterface(
 		UBlueprint* Blueprint,
 		UClass* InterfaceClass
 	);
 
+	// ── Animation Blueprint ──────────────────────────────────────────────────
+
+	/** Compile an Animation Blueprint. Returns true on success. */
+	UFUNCTION(BlueprintCallable, Category = "PhotonBP|Animation")
+	static bool CompileAnimBlueprint(UBlueprint* AnimBlueprint);
+
+	/** Add an Animation Graph node by class name. Returns node GUID string. */
+	UFUNCTION(BlueprintCallable, Category = "PhotonBP|Animation")
+	static FString AddAnimGraphNode(
+		UBlueprint* AnimBlueprint,
+		FString NodeClassName,
+		int32 NodeX,
+		int32 NodeY
+	);
+
+	/** Add a state to a state machine in an anim graph. Returns state GUID. */
+	UFUNCTION(BlueprintCallable, Category = "PhotonBP|Animation")
+	static FString AddStateToStateMachine(
+		UBlueprint* AnimBlueprint,
+		FString StateMachineName,
+		FString StateName,
+		int32 NodeX,
+		int32 NodeY
+	);
+
+	/** Set the entry state of a state machine. */
+	UFUNCTION(BlueprintCallable, Category = "PhotonBP|Animation")
+	static bool SetEntryState(
+		UBlueprint* AnimBlueprint,
+		FString StateMachineName,
+		FString StateName
+	);
+
+	/** Add a transition between two states. */
+	UFUNCTION(BlueprintCallable, Category = "PhotonBP|Animation")
+	static bool AddTransition(
+		UBlueprint* AnimBlueprint,
+		FString StateMachineName,
+		FString FromState,
+		FString ToState
+	);
+
+	/** Set the animation sequence played in a state. */
+	UFUNCTION(BlueprintCallable, Category = "PhotonBP|Animation")
+	static bool SetStateAnimation(
+		UBlueprint* AnimBlueprint,
+		FString StateMachineName,
+		FString StateName,
+		FString AnimSequencePath
+	);
+
+	// ── Material ─────────────────────────────────────────────────────────────
+
+	/** Get all expression node GUIDs in a material as JSON string. */
+	UFUNCTION(BlueprintCallable, Category = "PhotonBP|Material")
+	static FString GetMaterialExpressions(UMaterial* Material);
+
+	// ── Enhanced Input Asset Creation ────────────────────────────────────────
+
+	/** Create an InputAction asset at the given path. Returns asset path or empty on failure. */
+	UFUNCTION(BlueprintCallable, Category = "PhotonBP|EnhancedInput")
+	static FString CreateInputAction(FString AssetName, FString SavePath);
+
+	/** Create an InputMappingContext asset at the given path. Returns asset path or empty on failure. */
+	UFUNCTION(BlueprintCallable, Category = "PhotonBP|EnhancedInput")
+	static FString CreateInputMappingContext(FString AssetName, FString SavePath);
+
+	// ── PCG Graph Asset Creation ─────────────────────────────────────────────
+
+	/** Create a PCGGraph asset at the given path. Returns asset path or empty on failure. */
+	UFUNCTION(BlueprintCallable, Category = "PhotonBP|PCG")
+	static FString CreatePCGGraph(FString AssetName, FString SavePath);
+
 	// ── UMG Widget Designer ──────────────────────────────────────────────────
 
-	/**
-	 * Add a widget to a Widget Blueprint's designer canvas.
-	 * @param WidgetBlueprint   The Widget Blueprint asset (cast to UWidgetBlueprint internally)
-	 * @param WidgetClassName   e.g. "ProgressBar", "TextBlock", "Button", "Image"
-	 * @param WidgetName        Desired name for the new widget slot
-	 * @param PosX              Canvas position X (pixels from top-left)
-	 * @param PosY              Canvas position Y (pixels from top-left)
-	 * @param SizeX             Width in pixels
-	 * @param SizeY             Height in pixels
-	 * @return GUID string of the created widget slot, or empty string on failure
-	 */
 	UFUNCTION(BlueprintCallable, Category = "PhotonBP|UMG")
 	static FString AddWidgetToDesigner(
 		UBlueprint* WidgetBlueprint,
