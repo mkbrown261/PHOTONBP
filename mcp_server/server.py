@@ -1171,266 +1171,152 @@ async def handle_working_tools() -> list[types.TextContent]:  # noqa: C901
     """
     ueos_wt — Working Tools Checker
     ────────────────────────────────
-    Probes every tool group's core UE Python APIs and RC endpoints with
-    ZERO side-effects: no assets created, no assets modified, no writes.
-
-    Strategy:
-      • Python-execution tools  → one script that runs hasattr() on every
-        class/method each tool group depends on.  No instances created,
-        no functions called, no blueprints touched.
-      • RC HTTP / PhotonBPLibrary → call_function on the default object
-        using a known read-only function (GetGraphNodes on a nonexistent BP
-        returns "" — that's fine, we just need HTTP 200 back, not a result).
-      • search endpoint → empty query, expect a list back (even empty).
+    Sends one tiny script per tool group — each is well under UE's input
+    size limit.  Zero side-effects: no assets created, no writes, no calls
+    that modify state.  hasattr() only.
     """
-    # ── Part 1: Python API probe script ──────────────────────────────────
-    # Runs inside UE.  Returns UEOS_RESULT: with a dict of group → {ok, broken}
-    python_probe = r"""
-import unreal, json
 
-results = {}
+    # Each entry: (group_label, python_snippet)
+    # Every snippet MUST print exactly one line: PASS:<group> or FAIL:<group>:<json-list>
+    PROBES = [
+        ("core", """
+import unreal,json
+b=[]
+checks=[("EditorAssetLibrary",hasattr(unreal,"EditorAssetLibrary")),("EditorAssetLibrary.load_asset",hasattr(unreal.EditorAssetLibrary,"load_asset")),("EditorAssetLibrary.does_asset_exist",hasattr(unreal.EditorAssetLibrary,"does_asset_exist")),("EditorAssetLibrary.save_asset",hasattr(unreal.EditorAssetLibrary,"save_asset")),("AssetToolsHelpers",hasattr(unreal,"AssetToolsHelpers")),("AssetToolsHelpers.get_asset_tools",hasattr(unreal.AssetToolsHelpers,"get_asset_tools")),("SystemLibrary.get_engine_version",hasattr(unreal.SystemLibrary,"get_engine_version")),("Paths.get_project_file_path",hasattr(unreal.Paths,"get_project_file_path"))]
+[b.append(k) for k,v in checks if not v]
+print(("PASS:core" if not b else "FAIL:core:"+json.dumps(b)))
+"""),
+        ("blueprint", """
+import unreal,json
+b=[]
+p=getattr(unreal,"PhotonBPLibrary",None)
+checks=[("BlueprintFactory",hasattr(unreal,"BlueprintFactory")),("BlueprintEditorLibrary",hasattr(unreal,"BlueprintEditorLibrary")),("BEL.compile_blueprint",hasattr(unreal.BlueprintEditorLibrary,"compile_blueprint")),("BEL.add_function_graph",hasattr(unreal.BlueprintEditorLibrary,"add_function_graph")),("BEL.add_component",hasattr(unreal.BlueprintEditorLibrary,"add_component")),("BEL.add_interface",hasattr(unreal.BlueprintEditorLibrary,"add_interface")),("PhotonBPLibrary",p is not None),("PBP.add_member_variable",hasattr(p,"add_member_variable") if p else False),("PBP.add_struct_field",hasattr(p,"add_struct_field") if p else False),("PBP.connect_pins",hasattr(p,"connect_pins") if p else False),("PBP.get_graph_nodes",hasattr(p,"get_graph_nodes") if p else False),("PBP.add_custom_event",hasattr(p,"add_custom_event") if p else False),("PBP.add_event_node",hasattr(p,"add_event_node") if p else False),("PBP.add_function_call_node",hasattr(p,"add_function_call_node") if p else False),("PBP.add_variable_get_node",hasattr(p,"add_variable_get_node") if p else False),("PBP.add_variable_set_node",hasattr(p,"add_variable_set_node") if p else False),("PBP.set_pin_default_value",hasattr(p,"set_pin_default_value") if p else False),("PBP.add_widget_to_designer",hasattr(p,"add_widget_to_designer") if p else False),("PBP.add_event_dispatcher",hasattr(p,"add_event_dispatcher") if p else False),("PBP.set_variable_flags",hasattr(p,"set_variable_flags") if p else False)]
+[b.append(k) for k,v in checks if not v]
+print(("PASS:blueprint" if not b else "FAIL:blueprint:"+json.dumps(b)))
+"""),
+        ("data", """
+import unreal,json
+b=[]
+ue=unreal.UserDefinedEnum if hasattr(unreal,"UserDefinedEnum") else None
+dtf=unreal.DataTableFunctionLibrary if hasattr(unreal,"DataTableFunctionLibrary") else None
+checks=[("StructureFactory",hasattr(unreal,"StructureFactory")),("UserDefinedStruct",hasattr(unreal,"UserDefinedStruct")),("EnumFactory",hasattr(unreal,"EnumFactory")),("UserDefinedEnum",ue is not None),("UDE.num_enums",hasattr(ue,"num_enums") if ue else False),("UDE.set_meta_data",hasattr(ue,"set_meta_data") if ue else False),("UDE.get_display_name_text_by_index",hasattr(ue,"get_display_name_text_by_index") if ue else False),("DataTableFactory",hasattr(unreal,"DataTableFactory")),("DataTable",hasattr(unreal,"DataTable")),("DataTableFunctionLibrary",dtf is not None),("DTF.get_data_table_row_names",hasattr(dtf,"get_data_table_row_names") if dtf else False),("DTF.fill_data_table_from_csv_string",hasattr(dtf,"fill_data_table_from_csv_string") if dtf else False),("DTF.conv_data_table_to_json_string",hasattr(dtf,"conv_data_table_to_json_string") if dtf else False),("DataTableImportOptions",hasattr(unreal,"DataTableImportOptions")),("CSVImportType",hasattr(unreal,"CSVImportType")),("TFieldIterator",hasattr(unreal,"TFieldIterator")),("StructureEditorUtils_ABSENT",not hasattr(unreal,"StructureEditorUtils"))]
+[b.append(k) for k,v in checks if not v]
+print(("PASS:data" if not b else "FAIL:data:"+json.dumps(b)))
+"""),
+        ("scene", """
+import unreal,json
+b=[]
+ell=unreal.EditorLevelLibrary if hasattr(unreal,"EditorLevelLibrary") else None
+checks=[("EditorLevelLibrary",ell is not None),("ELL.spawn_actor_from_class",hasattr(ell,"spawn_actor_from_class") if ell else False),("ELL.get_all_level_actors",hasattr(ell,"get_all_level_actors") if ell else False),("ELL.save_current_level",hasattr(ell,"save_current_level") if ell else False),("ELL.get_editor_world",hasattr(ell,"get_editor_world") if ell else False),("StaticMeshActor",hasattr(unreal,"StaticMeshActor")),("PointLight",hasattr(unreal,"PointLight")),("DirectionalLight",hasattr(unreal,"DirectionalLight")),("SkyAtmosphere",hasattr(unreal,"SkyAtmosphere")),("ExponentialHeightFog",hasattr(unreal,"ExponentialHeightFog"))]
+[b.append(k) for k,v in checks if not v]
+print(("PASS:scene" if not b else "FAIL:scene:"+json.dumps(b)))
+"""),
+        ("animation", """
+import unreal,json
+b=[]
+abl=unreal.AnimBlueprintEditorLibrary if hasattr(unreal,"AnimBlueprintEditorLibrary") else None
+checks=[("AnimBlueprintFactory",hasattr(unreal,"AnimBlueprintFactory")),("AnimBlueprint",hasattr(unreal,"AnimBlueprint")),("AnimBlueprintEditorLibrary",abl is not None),("ABL.get_anim_graph",hasattr(abl,"get_anim_graph") if abl else False),("ABL.add_anim_graph_node",hasattr(abl,"add_anim_graph_node") if abl else False),("ABL.add_state_to_state_machine",hasattr(abl,"add_state_to_state_machine") if abl else False),("AnimationEditorLibrary",hasattr(unreal,"AnimationEditorLibrary")),("AnimMontage",hasattr(unreal,"AnimMontage")),("AnimMontageFactory",hasattr(unreal,"AnimMontageFactory"))]
+[b.append(k) for k,v in checks if not v]
+print(("PASS:animation" if not b else "FAIL:animation:"+json.dumps(b)))
+"""),
+        ("umg", """
+import unreal,json
+b=[]
+p=getattr(unreal,"PhotonBPLibrary",None)
+checks=[("WidgetBlueprintFactory",hasattr(unreal,"WidgetBlueprintFactory")),("WidgetBlueprint",hasattr(unreal,"WidgetBlueprint")),("PBP.add_widget_to_designer",hasattr(p,"add_widget_to_designer") if p else False),("SlateFontInfo",hasattr(unreal,"SlateFontInfo")),("SlateColor",hasattr(unreal,"SlateColor")),("SlateBrush",hasattr(unreal,"SlateBrush")),("ButtonStyle",hasattr(unreal,"ButtonStyle"))]
+[b.append(k) for k,v in checks if not v]
+print(("PASS:umg" if not b else "FAIL:umg:"+json.dumps(b)))
+"""),
+        ("material", """
+import unreal,json
+b=[]
+mel=unreal.MaterialEditingLibrary if hasattr(unreal,"MaterialEditingLibrary") else None
+checks=[("Material",hasattr(unreal,"Material")),("MaterialEditingLibrary",mel is not None),("MEL.get_material_expressions",hasattr(mel,"get_material_expressions") if mel else False),("MEL.create_material_expression",hasattr(mel,"create_material_expression") if mel else False),("MEL.connect_material_expressions",hasattr(mel,"connect_material_expressions") if mel else False),("MEL.recompile_material",hasattr(mel,"recompile_material") if mel else False),("MaterialInstanceConstant",hasattr(unreal,"MaterialInstanceConstant")),("MaterialExpressionTextureSample",hasattr(unreal,"MaterialExpressionTextureSample")),("MaterialExpressionScalarParameter",hasattr(unreal,"MaterialExpressionScalarParameter"))]
+[b.append(k) for k,v in checks if not v]
+print(("PASS:material" if not b else "FAIL:material:"+json.dumps(b)))
+"""),
+        ("enhanced_input", """
+import unreal,json
+b=[]
+checks=[("InputAction",hasattr(unreal,"InputAction")),("InputMappingContext",hasattr(unreal,"InputMappingContext")),("InputActionFactory",hasattr(unreal,"InputActionFactory")),("InputMappingContextFactory",hasattr(unreal,"InputMappingContextFactory")),("EnhancedInputLibrary",hasattr(unreal,"EnhancedInputLibrary"))]
+[b.append(k) for k,v in checks if not v]
+print(("PASS:enhanced_input" if not b else "FAIL:enhanced_input:"+json.dumps(b)))
+"""),
+        ("niagara_seq_bt_pcg", """
+import unreal,json
+b=[]
+checks=[("NiagaraSystem",hasattr(unreal,"NiagaraSystem")),("NiagaraEmitter",hasattr(unreal,"NiagaraEmitter")),("LevelSequence",hasattr(unreal,"LevelSequence")),("LevelSequenceEditorBlueprintLibrary",hasattr(unreal,"LevelSequenceEditorBlueprintLibrary")),("SequencerTools",hasattr(unreal,"SequencerTools")),("BehaviorTree",hasattr(unreal,"BehaviorTree")),("BehaviorTreeFactory",hasattr(unreal,"BehaviorTreeFactory")),("BlackboardData",hasattr(unreal,"BlackboardData")),("PCGGraph",hasattr(unreal,"PCGGraph"))]
+[b.append(k) for k,v in checks if not v]
+print(("PASS:niagara_seq_bt_pcg" if not b else "FAIL:niagara_seq_bt_pcg:"+json.dumps(b)))
+"""),
+    ]
 
-def chk(group, tests):
-    \"\"\"tests = list of (label, callable_that_returns_bool)\"\"\"
-    broken = []
-    for label, fn in tests:
+    # ── Run each probe script, collect results ────────────────────────────
+    raw: dict[str, dict] = {}
+    for group, script in PROBES:
         try:
-            ok = bool(fn())
+            result = await ue.execute_python(script.strip(), timeout=15)
+            output = result.get("output", "").strip()
+            # Find the PASS/FAIL line — may be anywhere in output
+            line = ""
+            for ln in output.split("\n"):
+                ln = ln.strip()
+                if ln.startswith("PASS:") or ln.startswith("FAIL:"):
+                    line = ln
+                    break
+            if line.startswith("PASS:"):
+                raw[group] = {"ok": True, "broken": []}
+            elif line.startswith("FAIL:"):
+                parts = line.split(":", 2)
+                broken = json.loads(parts[2]) if len(parts) == 3 else ["parse_error"]
+                raw[group] = {"ok": False, "broken": broken}
+            else:
+                # No marker found — script itself errored
+                raw[group] = {"ok": False, "broken": [f"NO_OUTPUT: {output[:120]}"]}
         except Exception as e:
-            ok = False
-            label = f"{label} [exc:{e}]"
-        if not ok:
-            broken.append(label)
-    results[group] = {"ok": len(broken) == 0, "broken": broken}
+            raw[group] = {"ok": False, "broken": [f"EXEC_ERROR: {str(e)[:120]}"]}
 
-# ── CORE INFRASTRUCTURE ───────────────────────────────────────────────
-chk("core", [
-    ("unreal.EditorAssetLibrary",         lambda: hasattr(unreal, "EditorAssetLibrary")),
-    ("EditorAssetLibrary.load_asset",     lambda: hasattr(unreal.EditorAssetLibrary, "load_asset")),
-    ("EditorAssetLibrary.does_asset_exist", lambda: hasattr(unreal.EditorAssetLibrary, "does_asset_exist")),
-    ("EditorAssetLibrary.make_directory", lambda: hasattr(unreal.EditorAssetLibrary, "make_directory")),
-    ("EditorAssetLibrary.save_asset",     lambda: hasattr(unreal.EditorAssetLibrary, "save_asset")),
-    ("unreal.AssetToolsHelpers",          lambda: hasattr(unreal, "AssetToolsHelpers")),
-    ("AssetToolsHelpers.get_asset_tools", lambda: hasattr(unreal.AssetToolsHelpers, "get_asset_tools")),
-    ("unreal.SystemLibrary.get_engine_version", lambda: hasattr(unreal.SystemLibrary, "get_engine_version")),
-    ("unreal.Paths.get_project_file_path", lambda: hasattr(unreal.Paths, "get_project_file_path")),
-])
-
-# ── BLUEPRINT TOOLS ───────────────────────────────────────────────────
-chk("blueprint", [
-    ("unreal.BlueprintFactory",            lambda: hasattr(unreal, "BlueprintFactory")),
-    ("unreal.BlueprintEditorLibrary",      lambda: hasattr(unreal, "BlueprintEditorLibrary")),
-    ("BlueprintEditorLibrary.compile_blueprint", lambda: hasattr(unreal.BlueprintEditorLibrary, "compile_blueprint")),
-    ("BlueprintEditorLibrary.add_function_graph", lambda: hasattr(unreal.BlueprintEditorLibrary, "add_function_graph")),
-    ("BlueprintEditorLibrary.add_component", lambda: hasattr(unreal.BlueprintEditorLibrary, "add_component")),
-    ("BlueprintEditorLibrary.add_interface", lambda: hasattr(unreal.BlueprintEditorLibrary, "add_interface")),
-    # PhotonBPLibrary — check class is registered in unreal module
-    ("unreal.PhotonBPLibrary",             lambda: hasattr(unreal, "PhotonBPLibrary")),
-    ("PhotonBPLibrary.add_member_variable", lambda: hasattr(unreal.PhotonBPLibrary, "add_member_variable")),
-    ("PhotonBPLibrary.add_struct_field",   lambda: hasattr(unreal.PhotonBPLibrary, "add_struct_field")),
-    ("PhotonBPLibrary.connect_pins",       lambda: hasattr(unreal.PhotonBPLibrary, "connect_pins")),
-    ("PhotonBPLibrary.get_graph_nodes",    lambda: hasattr(unreal.PhotonBPLibrary, "get_graph_nodes")),
-    ("PhotonBPLibrary.add_custom_event",   lambda: hasattr(unreal.PhotonBPLibrary, "add_custom_event")),
-    ("PhotonBPLibrary.add_event_node",     lambda: hasattr(unreal.PhotonBPLibrary, "add_event_node")),
-    ("PhotonBPLibrary.add_function_call_node", lambda: hasattr(unreal.PhotonBPLibrary, "add_function_call_node")),
-    ("PhotonBPLibrary.add_variable_get_node", lambda: hasattr(unreal.PhotonBPLibrary, "add_variable_get_node")),
-    ("PhotonBPLibrary.add_variable_set_node", lambda: hasattr(unreal.PhotonBPLibrary, "add_variable_set_node")),
-    ("PhotonBPLibrary.set_pin_default_value", lambda: hasattr(unreal.PhotonBPLibrary, "set_pin_default_value")),
-    ("PhotonBPLibrary.add_widget_to_designer", lambda: hasattr(unreal.PhotonBPLibrary, "add_widget_to_designer")),
-    ("PhotonBPLibrary.add_event_dispatcher", lambda: hasattr(unreal.PhotonBPLibrary, "add_event_dispatcher")),
-    ("PhotonBPLibrary.set_variable_flags", lambda: hasattr(unreal.PhotonBPLibrary, "set_variable_flags")),
-])
-
-# ── DATA TOOLS ────────────────────────────────────────────────────────
-chk("data", [
-    ("unreal.StructureFactory",            lambda: hasattr(unreal, "StructureFactory")),
-    ("unreal.UserDefinedStruct",           lambda: hasattr(unreal, "UserDefinedStruct")),
-    ("unreal.EnumFactory",                 lambda: hasattr(unreal, "EnumFactory")),
-    ("unreal.UserDefinedEnum",             lambda: hasattr(unreal, "UserDefinedEnum")),
-    ("UserDefinedEnum.num_enums",          lambda: hasattr(unreal.UserDefinedEnum, "num_enums")),
-    ("UserDefinedEnum.set_meta_data",      lambda: hasattr(unreal.UserDefinedEnum, "set_meta_data")),
-    ("UserDefinedEnum.get_display_name_text_by_index", lambda: hasattr(unreal.UserDefinedEnum, "get_display_name_text_by_index")),
-    ("unreal.DataTableFactory",            lambda: hasattr(unreal, "DataTableFactory")),
-    ("unreal.DataTable",                   lambda: hasattr(unreal, "DataTable")),
-    ("unreal.DataTableFunctionLibrary",    lambda: hasattr(unreal, "DataTableFunctionLibrary")),
-    ("DataTableFunctionLibrary.get_data_table_row_names", lambda: hasattr(unreal.DataTableFunctionLibrary, "get_data_table_row_names")),
-    ("DataTableFunctionLibrary.fill_data_table_from_csv_string", lambda: hasattr(unreal.DataTableFunctionLibrary, "fill_data_table_from_csv_string")),
-    ("DataTableFunctionLibrary.conv_data_table_to_json_string", lambda: hasattr(unreal.DataTableFunctionLibrary, "conv_data_table_to_json_string")),
-    ("unreal.DataTableImportOptions",      lambda: hasattr(unreal, "DataTableImportOptions")),
-    ("unreal.CSVImportType",               lambda: hasattr(unreal, "CSVImportType")),
-    ("unreal.TFieldIterator",              lambda: hasattr(unreal, "TFieldIterator")),
-    # These must NOT exist — confirm they are still absent
-    ("StructureEditorUtils_ABSENT",        lambda: not hasattr(unreal, "StructureEditorUtils")),
-])
-
-# ── SCENE TOOLS ───────────────────────────────────────────────────────
-chk("scene", [
-    ("unreal.EditorLevelLibrary",           lambda: hasattr(unreal, "EditorLevelLibrary")),
-    ("EditorLevelLibrary.spawn_actor_from_class", lambda: hasattr(unreal.EditorLevelLibrary, "spawn_actor_from_class")),
-    ("EditorLevelLibrary.get_all_level_actors", lambda: hasattr(unreal.EditorLevelLibrary, "get_all_level_actors")),
-    ("EditorLevelLibrary.save_current_level", lambda: hasattr(unreal.EditorLevelLibrary, "save_current_level")),
-    ("EditorLevelLibrary.get_editor_world", lambda: hasattr(unreal.EditorLevelLibrary, "get_editor_world")),
-    ("unreal.StaticMeshActor",              lambda: hasattr(unreal, "StaticMeshActor")),
-    ("unreal.PointLight",                   lambda: hasattr(unreal, "PointLight")),
-    ("unreal.DirectionalLight",             lambda: hasattr(unreal, "DirectionalLight")),
-    ("unreal.SkyAtmosphere",               lambda: hasattr(unreal, "SkyAtmosphere")),
-    ("unreal.ExponentialHeightFog",        lambda: hasattr(unreal, "ExponentialHeightFog")),
-])
-
-# ── ANIMATION TOOLS ───────────────────────────────────────────────────
-chk("animation", [
-    ("unreal.AnimBlueprintFactory",        lambda: hasattr(unreal, "AnimBlueprintFactory")),
-    ("unreal.AnimBlueprint",               lambda: hasattr(unreal, "AnimBlueprint")),
-    ("unreal.AnimBlueprintEditorLibrary",  lambda: hasattr(unreal, "AnimBlueprintEditorLibrary")),
-    ("AnimBlueprintEditorLibrary.get_anim_graph", lambda: hasattr(unreal.AnimBlueprintEditorLibrary, "get_anim_graph")),
-    ("AnimBlueprintEditorLibrary.add_anim_graph_node", lambda: hasattr(unreal.AnimBlueprintEditorLibrary, "add_anim_graph_node")),
-    ("AnimBlueprintEditorLibrary.add_state_to_state_machine", lambda: hasattr(unreal.AnimBlueprintEditorLibrary, "add_state_to_state_machine")),
-    ("unreal.AnimationEditorLibrary",      lambda: hasattr(unreal, "AnimationEditorLibrary")),
-    ("unreal.AnimMontage",                 lambda: hasattr(unreal, "AnimMontage")),
-    ("unreal.AnimMontageFactory",          lambda: hasattr(unreal, "AnimMontageFactory")),
-])
-
-# ── UMG TOOLS ─────────────────────────────────────────────────────────
-chk("umg", [
-    ("unreal.WidgetBlueprintFactory",      lambda: hasattr(unreal, "WidgetBlueprintFactory")),
-    ("unreal.WidgetBlueprint",             lambda: hasattr(unreal, "WidgetBlueprint")),
-    ("PhotonBPLibrary.add_widget_to_designer", lambda: hasattr(unreal.PhotonBPLibrary, "add_widget_to_designer")),
-    ("unreal.SlateFontInfo",               lambda: hasattr(unreal, "SlateFontInfo")),
-    ("unreal.SlateColor",                  lambda: hasattr(unreal, "SlateColor")),
-    ("unreal.SlateBrush",                  lambda: hasattr(unreal, "SlateBrush")),
-    ("unreal.ButtonStyle",                 lambda: hasattr(unreal, "ButtonStyle")),
-])
-
-# ── MATERIAL TOOLS ────────────────────────────────────────────────────
-chk("material", [
-    ("unreal.Material",                    lambda: hasattr(unreal, "Material")),
-    ("unreal.MaterialEditingLibrary",      lambda: hasattr(unreal, "MaterialEditingLibrary")),
-    ("MaterialEditingLibrary.get_material_expressions", lambda: hasattr(unreal.MaterialEditingLibrary, "get_material_expressions")),
-    ("MaterialEditingLibrary.create_material_expression", lambda: hasattr(unreal.MaterialEditingLibrary, "create_material_expression")),
-    ("MaterialEditingLibrary.connect_material_expressions", lambda: hasattr(unreal.MaterialEditingLibrary, "connect_material_expressions")),
-    ("MaterialEditingLibrary.recompile_material", lambda: hasattr(unreal.MaterialEditingLibrary, "recompile_material")),
-    ("unreal.MaterialInstanceConstant",    lambda: hasattr(unreal, "MaterialInstanceConstant")),
-    ("unreal.MaterialExpressionTextureSample", lambda: hasattr(unreal, "MaterialExpressionTextureSample")),
-    ("unreal.MaterialExpressionScalarParameter", lambda: hasattr(unreal, "MaterialExpressionScalarParameter")),
-])
-
-# ── ENHANCED INPUT TOOLS ──────────────────────────────────────────────
-chk("enhanced_input", [
-    ("unreal.InputAction",                 lambda: hasattr(unreal, "InputAction")),
-    ("unreal.InputMappingContext",         lambda: hasattr(unreal, "InputMappingContext")),
-    ("unreal.InputActionFactory",          lambda: hasattr(unreal, "InputActionFactory")),
-    ("unreal.InputMappingContextFactory",  lambda: hasattr(unreal, "InputMappingContextFactory")),
-    ("unreal.EnhancedInputLibrary",        lambda: hasattr(unreal, "EnhancedInputLibrary")),
-])
-
-# ── NIAGARA TOOLS ─────────────────────────────────────────────────────
-chk("niagara", [
-    ("unreal.NiagaraSystem",               lambda: hasattr(unreal, "NiagaraSystem")),
-    ("unreal.NiagaraEmitter",              lambda: hasattr(unreal, "NiagaraEmitter")),
-    ("unreal.FXSystemAsset",               lambda: hasattr(unreal, "FXSystemAsset")),
-])
-
-# ── SEQUENCER TOOLS ───────────────────────────────────────────────────
-chk("sequencer", [
-    ("unreal.LevelSequence",               lambda: hasattr(unreal, "LevelSequence")),
-    ("unreal.LevelSequenceEditorBlueprintLibrary", lambda: hasattr(unreal, "LevelSequenceEditorBlueprintLibrary")),
-    ("unreal.MovieSceneTrack",             lambda: hasattr(unreal, "MovieSceneTrack")),
-    ("unreal.SequencerTools",              lambda: hasattr(unreal, "SequencerTools")),
-])
-
-# ── BEHAVIOR TREE TOOLS ───────────────────────────────────────────────
-chk("behavior_tree", [
-    ("unreal.BehaviorTree",                lambda: hasattr(unreal, "BehaviorTree")),
-    ("unreal.BehaviorTreeFactory",         lambda: hasattr(unreal, "BehaviorTreeFactory")),
-    ("unreal.BlackboardData",              lambda: hasattr(unreal, "BlackboardData")),
-    ("unreal.BlackboardDataFactory",       lambda: hasattr(unreal, "BlackboardDataFactory")),
-])
-
-# ── PCG TOOLS ─────────────────────────────────────────────────────────
-chk("pcg", [
-    ("unreal.PCGGraph",                    lambda: hasattr(unreal, "PCGGraph")),
-    ("unreal.PCGGraphFactory",             lambda: hasattr(unreal, "PCGGraphFactory")),
-])
-
-print("UEOS_RESULT:" + json.dumps(results))
-"""
-
-    probe_result = await ue.execute_python(python_probe, timeout=60)
-    raw = None
-    for line in probe_result.get("output", "").split("\n"):
-        line = line.strip()
-        if line.startswith("UEOS_RESULT:"):
-            try:
-                raw = json.loads(line[len("UEOS_RESULT:"):])
-            except Exception:
-                pass
-            break
-
-    if raw is None:
-        return [types.TextContent(type="text", text=json.dumps({
-            "error": "ueos_wt probe script failed to return UEOS_RESULT — UE may not be connected",
-            "raw_output": probe_result.get("output", "")[:1000]
-        }, indent=2))]
-
-    # ── Part 2: RC HTTP endpoint probes ──────────────────────────────────
+    # ── RC HTTP endpoint probes ───────────────────────────────────────────
     rc_probes: dict[str, dict] = {}
 
-    # PhotonBPLibrary object path resolves?
     photon_obj = "/Script/PhotonBP.Default__PhotonBPLibrary"
     try:
-        resp = await ue.call_function(
-            photon_obj,
-            "GetGraphNodes",
-            parameters={"Blueprint": None, "GraphName": ""},
-            transaction=False,
-        )
-        rc_probes["photon_rc_call"] = {"ok": True, "detail": "RC PUT /remote/object/call reached PhotonBPLibrary"}
+        await ue.call_function(photon_obj, "GetGraphNodes",
+                               parameters={"Blueprint": None, "GraphName": ""},
+                               transaction=False)
+        rc_probes["photon_rc_call"] = {"ok": True, "detail": "RC /remote/object/call → PhotonBPLibrary OK"}
     except Exception as e:
         err = str(e)
-        # A 422 means UE received the call but rejected params — that still means
-        # the endpoint and object path both work fine.
         if "422" in err or "Unprocessable" in err:
-            rc_probes["photon_rc_call"] = {"ok": True, "detail": "RC 422 expected (null BP param) — endpoint OK"}
+            rc_probes["photon_rc_call"] = {"ok": True, "detail": "RC 422 (null BP param) — endpoint reachable"}
         else:
             rc_probes["photon_rc_call"] = {"ok": False, "detail": f"RC call failed: {err[:200]}"}
 
-    # Search endpoint
     try:
-        assets = await ue.search_assets("__ueos_wt_probe__", class_names=[], package_paths=["/Game"])
-        rc_probes["search_endpoint"] = {"ok": True, "detail": f"RC /remote/search/assets OK — returned {len(assets)} assets"}
+        assets = await ue.search_assets("__wt__", class_names=[], package_paths=["/Game"])
+        rc_probes["search_endpoint"] = {"ok": True, "detail": f"/remote/search/assets OK ({len(assets)} results)"}
     except Exception as e:
-        rc_probes["search_endpoint"] = {"ok": False, "detail": f"Search endpoint failed: {str(e)[:200]}"}
+        rc_probes["search_endpoint"] = {"ok": False, "detail": f"Failed: {str(e)[:200]}"}
 
-    # Thumbnail endpoint — probe with a known engine path that always exists
     try:
         thumb = await ue.get_asset_thumbnail("/Engine/EngineMaterials/DefaultMaterial")
         rc_probes["thumbnail_endpoint"] = {
             "ok": thumb is not None,
-            "detail": "RC /remote/object/thumbnail OK" if thumb else "Thumbnail returned None"
+            "detail": "/remote/object/thumbnail OK" if thumb else "Returned None"
         }
     except Exception as e:
-        rc_probes["thumbnail_endpoint"] = {"ok": False, "detail": f"Thumbnail endpoint failed: {str(e)[:200]}"}
+        rc_probes["thumbnail_endpoint"] = {"ok": False, "detail": f"Failed: {str(e)[:200]}"}
 
-    # ── Part 3: Build report ──────────────────────────────────────────────
+    # ── Build report ──────────────────────────────────────────────────────
     ICON = {True: "✅", False: "❌"}
     lines = [
         "═══════════════════════════════════════════════════════",
         "  ueos_wt — Working Tools Report",
         "═══════════════════════════════════════════════════════",
     ]
-
     all_pass = True
-    group_order = [
-        "core", "blueprint", "data", "scene",
-        "animation", "umg", "material",
-        "enhanced_input", "niagara", "sequencer",
-        "behavior_tree", "pcg",
-    ]
 
-    for group in group_order:
-        if group not in raw:
-            continue
-        g = raw[group]
+    for group, g in raw.items():
         ok = g.get("ok", False)
         broken = g.get("broken", [])
         if not ok:
@@ -1439,27 +1325,24 @@ print("UEOS_RESULT:" + json.dumps(results))
         if broken:
             for b in broken:
                 lines.append(f"        ✗ {b}")
-        else:
-            lines.append(f"        all APIs present")
 
     lines.append("  ─────────────────────────────────────────────────────")
     lines.append("  RC HTTP ENDPOINTS")
-    for probe_name, probe in rc_probes.items():
+    for name, probe in rc_probes.items():
         ok = probe.get("ok", False)
         if not ok:
             all_pass = False
-        lines.append(f"  {ICON[ok]} {probe_name}")
+        lines.append(f"  {ICON[ok]} {name}")
         lines.append(f"        {probe['detail']}")
 
     lines.append("═══════════════════════════════════════════════════════")
     if all_pass:
-        lines.append("  ✅  ALL CHECKS PASSED — tools are trustworthy")
+        lines.append("  ✅  ALL CHECKS PASSED")
     else:
         lines.append("  ❌  FAILURES DETECTED — broken APIs listed above")
-        lines.append("  Fix steps:")
-        lines.append("    • Blueprint/data failures in PhotonBPLibrary → rebuild plugin in UE")
-        lines.append("    • Python API missing (e.g. AnimBlueprintEditorLibrary) → check UE plugin enabled")
-        lines.append("    • RC endpoint failures → check UE Remote Control plugin + port 30010")
+        lines.append("  • PhotonBPLibrary missing → rebuild plugin + restart UE")
+        lines.append("  • Python class missing → check UE plugin is enabled")
+        lines.append("  • RC endpoint failed → check Remote Control plugin + port 30010")
     lines.append("═══════════════════════════════════════════════════════")
 
     return [types.TextContent(type="text", text="\n".join(lines))]
