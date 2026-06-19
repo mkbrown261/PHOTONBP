@@ -68,7 +68,22 @@ Struct references, and custom struct/enum types.""",
                         "name": {"type": "string", "description": "Variable name (use PascalCase for UE convention)"},
                         "type": {
                             "type": "string",
-                            "description": "Variable type: bool, int, int64, float, double, string, name, text, vector, rotator, transform, Actor, Character, StaticMeshComponent, SkeletalMeshComponent, or any UE class name"
+                            "description": (
+                                "Variable type — use EXACTLY one of these strings:\n"
+                                "PRIMITIVES: bool, int, int64, float, double, string, name, text, byte\n"
+                                "STRUCTS: vector, rotator, transform, linearcolor, vector2d, timerhandle, hitresult, inputactionvalue\n"
+                                "ACTORS/PAWNS: actor, character, pawn, playercontroller, controller\n"
+                                "COMPONENTS: actorcomponent, scenecomponent, staticmeshcomponent, skeletalmeshcomponent, "
+                                "capsulecomponent, spherecomponent, boxcomponent, charactermovementcomponent, "
+                                "cameracomponent, springarmcomponent, widgetcomponent, niagaracomponent\n"
+                                "ANIMATION: animsequence, animsequencebase, animmontage, animinstance, blendspace\n"
+                                "UI: userwidget, textblock, image, progressbar, button\n"
+                                "MESH/MATERIAL: skeletalmesh, staticmesh, materialinterface, materialinstancedynamic, texture2d\n"
+                                "AUDIO: soundbase, soundcue\n"
+                                "INPUT: inputaction, inputmappingcontext\n"
+                                "FX: niagarasystem, particlesystem\n"
+                                "DO NOT pass 'class', 'AnimMontage[]', 'TSubclassOf', or C++ type syntax — use the exact strings above."
+                            )
                         },
                         "default_value": {"description": "Default value for the variable (type-appropriate)"},
                         "is_exposed": {"type": "boolean", "description": "Expose to editor (instance editable)", "default": False},
@@ -540,34 +555,100 @@ except Exception as e:
         category = args.get("category", "Default")
 
         # Map type string to (PinCategory, PinSubCategory, PinSubCategoryObjectPath)
+        # IMPORTANT: every type Claude might request must be here.
+        # Fallthrough ("object","",var_type) produces wrong types silently — always add new entries.
         type_map = {
-            "bool":               ("bool",   "",       ""),
-            "boolean":            ("bool",   "",       ""),
-            "int":                ("int",    "",       ""),
-            "integer":            ("int",    "",       ""),
-            "int64":              ("int64",  "",       ""),
-            "float":              ("real",   "float",  ""),
-            "double":             ("real",   "double", ""),
-            "string":             ("string", "",       ""),
-            "name":               ("name",   "",       ""),
-            "text":               ("text",   "",       ""),
-            "vector":             ("struct", "",       "/Script/CoreUObject.Vector"),
-            "rotator":            ("struct", "",       "/Script/CoreUObject.Rotator"),
-            "transform":          ("struct", "",       "/Script/CoreUObject.Transform"),
-            "linearcolor":        ("struct", "",       "/Script/CoreUObject.LinearColor"),
-            "color":              ("struct", "",       "/Script/CoreUObject.LinearColor"),
-            "vector2d":           ("struct", "",       "/Script/CoreUObject.Vector2D"),
-            "actor":              ("object", "",       "/Script/Engine.Actor"),
-            "animsequencebase":   ("object", "",       "/Script/Engine.AnimSequenceBase"),
-            "soundbase":          ("object", "",       "/Script/Engine.SoundBase"),
-            "staticmeshcomponent":("object", "",       "/Script/Engine.StaticMeshComponent"),
-            "skeletalmeshcomponent":("object","",      "/Script/Engine.SkeletalMeshComponent"),
+            # ── Primitives ────────────────────────────────────────────────────
+            "bool":                      ("bool",   "",        ""),
+            "boolean":                   ("bool",   "",        ""),
+            "int":                       ("int",    "",        ""),
+            "integer":                   ("int",    "",        ""),
+            "int64":                     ("int64",  "",        ""),
+            "float":                     ("real",   "float",   ""),
+            "double":                    ("real",   "double",  ""),
+            "string":                    ("string", "",        ""),
+            "name":                      ("name",   "",        ""),
+            "text":                      ("text",   "",        ""),
+            "byte":                      ("byte",   "",        ""),
+            # ── Structs ───────────────────────────────────────────────────────
+            "vector":                    ("struct", "",        "/Script/CoreUObject.Vector"),
+            "vector3":                   ("struct", "",        "/Script/CoreUObject.Vector"),
+            "rotator":                   ("struct", "",        "/Script/CoreUObject.Rotator"),
+            "transform":                 ("struct", "",        "/Script/CoreUObject.Transform"),
+            "linearcolor":               ("struct", "",        "/Script/CoreUObject.LinearColor"),
+            "color":                     ("struct", "",        "/Script/CoreUObject.LinearColor"),
+            "vector2d":                  ("struct", "",        "/Script/CoreUObject.Vector2D"),
+            "timerhandle":               ("struct", "",        "/Script/Engine.TimerHandle"),
+            "hittresult":                ("struct", "",        "/Script/Engine.HitResult"),
+            "hitresult":                 ("struct", "",        "/Script/Engine.HitResult"),
+            "damageevent":               ("struct", "",        "/Script/Engine.DamageEvent"),
+            "inputactionvalue":          ("struct", "",        "/Script/EnhancedInput.InputActionValue"),
+            # ── Engine object refs ────────────────────────────────────────────
+            "actor":                     ("object", "",        "/Script/Engine.Actor"),
+            "character":                 ("object", "",        "/Script/Engine.Character"),
+            "pawn":                      ("object", "",        "/Script/Engine.Pawn"),
+            "controller":                ("object", "",        "/Script/Engine.Controller"),
+            "playercontroller":          ("object", "",        "/Script/Engine.PlayerController"),
+            "actorcomponent":            ("object", "",        "/Script/Engine.ActorComponent"),
+            "scenecomponent":            ("object", "",        "/Script/Engine.SceneComponent"),
+            "staticmeshcomponent":       ("object", "",        "/Script/Engine.StaticMeshComponent"),
+            "skeletalmeshcomponent":     ("object", "",        "/Script/Engine.SkeletalMeshComponent"),
+            "capsulecomponent":          ("object", "",        "/Script/Engine.CapsuleComponent"),
+            "spherecomponent":           ("object", "",        "/Script/Engine.SphereComponent"),
+            "boxcomponent":              ("object", "",        "/Script/Engine.BoxComponent"),
+            "charactermovementcomponent":("object", "",        "/Script/Engine.CharacterMovementComponent"),
+            "skeletalmesh":              ("object", "",        "/Script/Engine.SkeletalMesh"),
+            "staticmesh":                ("object", "",        "/Script/Engine.StaticMesh"),
+            "material":                  ("object", "",        "/Script/Engine.Material"),
+            "materialinterface":         ("object", "",        "/Script/Engine.MaterialInterface"),
+            "materialinstancedynamic":   ("object", "",        "/Script/Engine.MaterialInstanceDynamic"),
+            "texture":                   ("object", "",        "/Script/Engine.Texture"),
+            "texture2d":                 ("object", "",        "/Script/Engine.Texture2D"),
+            "soundbase":                 ("object", "",        "/Script/Engine.SoundBase"),
+            "soundcue":                  ("object", "",        "/Script/Engine.SoundCue"),
+            "particlesystem":            ("object", "",        "/Script/Engine.ParticleSystem"),
+            "niagara":                   ("object", "",        "/Script/Niagara.NiagaraSystem"),
+            "niagarasystem":             ("object", "",        "/Script/Niagara.NiagaraSystem"),
+            "niagaracomponent":          ("object", "",        "/Script/Niagara.NiagaraComponent"),
+            "decalcomponent":            ("object", "",        "/Script/Engine.DecalComponent"),
+            "pointlightcomponent":       ("object", "",        "/Script/Engine.PointLightComponent"),
+            "spotlightcomponent":        ("object", "",        "/Script/Engine.SpotLightComponent"),
+            "arrowcomponent":            ("object", "",        "/Script/Engine.ArrowComponent"),
+            # ── Animation ─────────────────────────────────────────────────────
+            "animsequence":              ("object", "",        "/Script/Engine.AnimSequence"),
+            "animsequencebase":          ("object", "",        "/Script/Engine.AnimSequenceBase"),
+            "animmontage":               ("object", "",        "/Script/Engine.AnimMontage"),
+            "animationasset":            ("object", "",        "/Script/Engine.AnimationAsset"),
+            "animinstance":              ("object", "",        "/Script/Engine.AnimInstance"),
+            "blendspace":                ("object", "",        "/Script/Engine.BlendSpace"),
+            # ── UMG / UI ──────────────────────────────────────────────────────
+            "userwidget":                ("object", "",        "/Script/UMG.UserWidget"),
+            "widget":                    ("object", "",        "/Script/UMG.UserWidget"),
+            "widgetcomponent":           ("object", "",        "/Script/UMG.WidgetComponent"),
+            "textblock":                 ("object", "",        "/Script/UMG.TextBlock"),
+            "image":                     ("object", "",        "/Script/UMG.Image"),
+            "progressbar":               ("object", "",        "/Script/UMG.ProgressBar"),
+            "button":                    ("object", "",        "/Script/UMG.Button"),
+            # ── Input ─────────────────────────────────────────────────────────
+            "inputaction":               ("object", "",        "/Script/EnhancedInput.InputAction"),
+            "inputmappingcontext":       ("object", "",        "/Script/EnhancedInput.InputMappingContext"),
+            # ── Camera ────────────────────────────────────────────────────────
+            "cameracomponent":           ("object", "",        "/Script/Engine.CameraComponent"),
+            "springarmcomponent":        ("object", "",        "/Script/Engine.SpringArmComponent"),
         }
 
         if var_type in type_map:
             pin_cat, pin_sub_cat, pin_sub_obj = type_map[var_type]
         else:
-            pin_cat, pin_sub_cat, pin_sub_obj = "object", "", var_type
+            # Unknown type: attempt to use as a full script path if it starts with /Script
+            # Otherwise log a warning and fall back — this should rarely trigger now.
+            if var_type.startswith("/script/") or var_type.startswith("/game/"):
+                pin_cat, pin_sub_cat, pin_sub_obj = "object", "", var_type
+            else:
+                # Try treating it as an Engine class shortname → /Script/Engine.<Type>
+                pin_cat     = "object"
+                pin_sub_cat = ""
+                pin_sub_obj = f"/Script/Engine.{args['type']}"  # preserve original case
 
         ie_str = "True" if is_exposed else "False"
 

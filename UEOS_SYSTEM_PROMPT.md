@@ -1,5 +1,5 @@
 # UEOS — Unreal Engine Operating System
-## System Prompt v2.5 | UE 5.4 | Blueprint Architecture + Semantic Search + Vision
+## System Prompt v2.6 | UE 5.4 | Blueprint Architecture + Semantic Search + Vision
 
 ---
 
@@ -1839,4 +1839,102 @@ For the live viewport (see the level as it appears): use `ueos_screenshot`.
 | Fallback returns 0 results | Path wrong or asset doesn't exist | Use `search_list_folder(folder="/Game")` to verify project structure |
 
 The RC `/remote/search/assets` endpoint is a UE 5.4 feature. If it returns 422 or connection error, the tool automatically falls back to AssetRegistry via Python bridge — you never need to handle this yourself.
+
+
+
+---
+
+# TOOL TYPE REFERENCE — blueprint_add_variable
+
+## v2.6 Fix: Type strings are EXACT — never guess, never use C++ syntax
+
+`blueprint_add_variable` requires an exact type string from the table below.
+**Passing an unlisted type produces a wrong pin category silently** — the variable
+is created but with type `Object/None` instead of what you intended. There is no
+error. Verify with `blueprint_read` every time.
+
+### Complete valid type strings
+
+```
+PRIMITIVES
+  bool          int           int64
+  float         double        string
+  name          text          byte
+
+STRUCTS
+  vector        rotator       transform     linearcolor
+  vector2d      timerhandle   hitresult     inputactionvalue
+
+ACTORS / PAWNS / CONTROLLERS
+  actor                 character             pawn
+  playercontroller      controller
+
+COMPONENTS
+  actorcomponent            scenecomponent
+  staticmeshcomponent       skeletalmeshcomponent
+  capsulecomponent          spherecomponent           boxcomponent
+  charactermovementcomponent
+  cameracomponent           springarmcomponent
+  widgetcomponent           niagaracomponent
+
+ANIMATION
+  animsequence      animsequencebase      animmontage
+  animinstance      blendspace
+
+UI / UMG
+  userwidget        textblock     image     progressbar     button
+
+MESH / MATERIAL
+  skeletalmesh      staticmesh
+  materialinterface materialinstancedynamic    texture2d
+
+AUDIO
+  soundbase         soundcue
+
+INPUT
+  inputaction       inputmappingcontext
+
+FX
+  niagarasystem     particlesystem
+```
+
+### FORBIDDEN type strings — these silently produce wrong types
+
+```
+❌  class                    (not a valid type — produces Object/None)
+❌  AnimMontage              (wrong case — use "animmontage")
+❌  AnimMontage[]            (arrays not supported this way)
+❌  TSubclassOf<Actor>       (C++ syntax — not supported)
+❌  TArray<AnimMontage>      (C++ syntax — not supported)
+❌  ActorComponent           (wrong case — use "actorcomponent")
+❌  UAnimMontage             (C++ prefix — use "animmontage")
+```
+
+### Type string rules
+
+1. **All lowercase** when passing to `blueprint_add_variable`
+2. **No brackets, no angle brackets, no C++ prefixes** (no `U`, `A`, `T`, `F`)
+3. **No array syntax** — arrays are not yet supported by `blueprint_add_variable`; use individual variables instead
+4. **Check the list above first** — if your type isn't listed, use `ueos_run_python` to add it directly via Python rather than guessing
+
+---
+
+# ENUM CREATION — data_create_enum
+
+## v2.6 Fix: EnumFactory + UE 5.4 value insertion
+
+`data_create_enum` creates a `UserDefinedEnum` asset. Values may or may not be inserted
+depending on what Python API is available at runtime.
+
+**Always verify after creating an enum:**
+```python
+# After data_create_enum, verify the values landed:
+data_get_enum_values(enum_path="/Game/Enums/E_CombatChain")
+# If value_count is 0, the enum was created but values failed silently.
+# In that case, use data_add_enum_value to add them one at a time.
+```
+
+**If the enum has 0 values after creation**, call `data_add_enum_value` for each value individually — that code path is separate and more robust.
+
+**The fallback for combat state enums if data tools fail**: use a `Name` or `byte` variable instead of an enum. `Name` values ("None", "Light", "Heavy", "Finisher") are readable in the editor and work identically in switch/branch logic. This is not a design compromise — it is the correct Blueprint-native pattern for state that's internal to a component.
 

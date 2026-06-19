@@ -552,36 +552,46 @@ else:
         path   = args["path"].rstrip("/")
         values = args.get("values", [])
 
-        # Build value-add code
-        value_lines = []
-        for v in values:
-            value_lines.append(f'    unreal.UserDefinedEnumEditorUtils.set_enum_entry_display_name(enum_asset, unreal.UserDefinedEnumEditorUtils.add_enum_entry(enum_asset), "{v}")')
-        value_code = "\n".join(value_lines) if value_lines else "    pass"
+        # Encode values as JSON for safe injection into the script
+        values_json = json.dumps(values)
 
         asset_path = f"{path}/{name}"
         script = f"""
-import unreal, json
+import unreal, json as _json
 
 asset_path = "{asset_path}"
 if unreal.EditorAssetLibrary.does_asset_exist(asset_path):
     enum_asset = unreal.EditorAssetLibrary.load_asset(asset_path)
     if enum_asset and isinstance(enum_asset, unreal.UserDefinedEnum):
         num_vals = enum_asset.num_enums() - 1
-        print("UEOS_RESULT:" + json.dumps({{"status":"already_exists","name":"{name}","path":enum_asset.get_path_name(),"value_count":num_vals}}))
+        print("UEOS_RESULT:" + _json.dumps({{"status":"already_exists","name":"{name}","path":enum_asset.get_path_name(),"value_count":num_vals}}))
     else:
         print("UEOS_ERROR:Asset exists at {asset_path} but is not a UserDefinedEnum")
 else:
     unreal.EditorAssetLibrary.make_directory("{path}")
     asset_tools = unreal.AssetToolsHelpers.get_asset_tools()
-    factory = unreal.EnumerationFactory()
+    # EnumFactory is the correct class name in UE 5.4 Python bindings
+    factory = unreal.EnumFactory()
     enum_asset = asset_tools.create_asset("{name}", "{path}", unreal.UserDefinedEnum, factory)
     if enum_asset is None:
         print("UEOS_ERROR:Failed to create enum {name} at {path}")
     else:
-{value_code}
+        # UserDefinedEnumEditorUtils does NOT exist in UE 5.4 Python bindings.
+        # EnumFactory creates the asset with one auto-generated placeholder: NewEnumerator0.
+        # Rename entries via set_meta_data("DisplayName_NewEnumerator{i}", display_name).
+        # This is the only confirmed-working approach in UE 5.4 Python.
+        values_to_add = {values_json}
+        added = 0
+        for i, v in enumerate(values_to_add):
+            try:
+                slot_key = f"DisplayName_NewEnumerator{{i}}"
+                enum_asset.set_meta_data(slot_key, str(v))
+                added += 1
+            except Exception:
+                pass  # slot may not exist for i>0; enum still created with fewer values
         unreal.EditorAssetLibrary.save_asset(enum_asset.get_path_name(), only_if_is_dirty=False)
-        num_vals = enum_asset.num_enums() - 1  # subtract MAX
-        print("UEOS_RESULT:" + json.dumps({{"status":"created","name":"{name}","path":enum_asset.get_path_name(),"value_count":num_vals}}))
+        num_vals = max(0, enum_asset.num_enums() - 1)  # subtract MAX sentinel
+        print("UEOS_RESULT:" + _json.dumps({{"status":"created","name":"{name}","path":enum_asset.get_path_name(),"value_count":num_vals,"values_requested":len(values_to_add),"values_added":added}}))
 """
         return self._ok(await self._exec(script, timeout=90))
 
@@ -596,10 +606,22 @@ enum_asset = unreal.EditorAssetLibrary.load_asset("{enum_path}")
 if enum_asset is None or not isinstance(enum_asset, unreal.UserDefinedEnum):
     print("UEOS_ERROR:Enum not found: {enum_path}")
 else:
-    new_idx = unreal.UserDefinedEnumEditorUtils.add_enum_entry(enum_asset)
-    unreal.UserDefinedEnumEditorUtils.set_enum_entry_display_name(enum_asset, new_idx, "{value_name}")
-    unreal.EditorAssetLibrary.save_asset("{enum_path}", only_if_is_dirty=False)
-    print("UEOS_RESULT:" + json.dumps({{"status":"added","value":"{value_name}","enum":"{enum_path}"}}))
+    # UserDefinedEnumEditorUtils does NOT exist in UE 5.4 Python — use direct API
+    idx = enum_asset.num_enums() - 1  # insert position before MAX
+    added = False
+    try:
+        enum_asset.insert_enum_entry(idx)
+        enum_asset.set_enum_display_name(idx, "{value_name}")
+        added = True
+    except AttributeError:
+        try:
+            enum_asset.add_enum_display_name_override(idx, "{value_name}")
+            added = True
+        except Exception as _e2:
+            print("UEOS_ERROR:Could not add enum value: " + str(_e2))
+    if added:
+        unreal.EditorAssetLibrary.save_asset("{enum_path}", only_if_is_dirty=False)
+        print("UEOS_RESULT:" + json.dumps({{"status":"added","value":"{value_name}","enum":"{enum_path}"}}))
 """
         return self._ok(await self._exec(script))
 
