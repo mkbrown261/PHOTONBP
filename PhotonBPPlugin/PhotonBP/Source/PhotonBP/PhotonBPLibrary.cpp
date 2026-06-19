@@ -42,16 +42,12 @@
 #include "Engine/UserDefinedEnum.h"
 // DataTable
 #include "Engine/DataTable.h"
-#include "DataTableEditorUtils.h"
 // Material
 #include "Materials/Material.h"
 #include "Materials/MaterialExpression.h"
-// Animation BP
-#include "Animation/AnimBlueprint.h"
 // Asset tools for factory-based creation
 #include "AssetToolsModule.h"
 #include "IAssetTools.h"
-#include "Factories/Factory.h"
 #include "FileHelpers.h"
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
@@ -688,33 +684,29 @@ FString UPhotonBPLibrary::AddWidgetToDesigner(
 	return FString::Printf(TEXT("%s:%d"), *WidgetName, SlotIndex);
 }
 
-// ── AddComponent ─────────────────────────────────────────────────────────────
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// COMPONENT & INTERFACE
+// ═══════════════════════════════════════════════════════════════════════════════
 
 bool UPhotonBPLibrary::AddComponent(UBlueprint* Blueprint, UClass* ComponentClass, FName ComponentName)
 {
 	if (!Blueprint || !ComponentClass) return false;
 	if (!Blueprint->SimpleConstructionScript) return false;
-
 	USCS_Node* NewNode = Blueprint->SimpleConstructionScript->CreateNode(ComponentClass, ComponentName);
 	if (!NewNode) return false;
-
 	Blueprint->SimpleConstructionScript->AddNode(NewNode);
 	FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
 	return true;
 }
 
-// ── AddInterface ──────────────────────────────────────────────────────────────
-
 bool UPhotonBPLibrary::AddInterface(UBlueprint* Blueprint, UClass* InterfaceClass)
 {
 	if (!Blueprint || !InterfaceClass) return false;
-
-	// Check not already implemented
 	for (const FBPInterfaceDescription& Desc : Blueprint->ImplementedInterfaces)
 	{
-		if (Desc.Interface == InterfaceClass) return true; // already there
+		if (Desc.Interface == InterfaceClass) return true;
 	}
-
 	FBPInterfaceDescription NewInterface;
 	NewInterface.Interface = InterfaceClass;
 	Blueprint->ImplementedInterfaces.Add(NewInterface);
@@ -741,7 +733,6 @@ void UPhotonBPLibrary::EnumSetMetaData(UUserDefinedEnum* Enum, FName Key, FStrin
 int32 UPhotonBPLibrary::EnumAddEntry(UUserDefinedEnum* Enum, FString EntryName)
 {
 	if (!Enum) return -1;
-	// NumEnums includes the MAX sentinel — new slot is NumEnums-1
 	int32 SlotIndex = Enum->NumEnums() - 1;
 	FString DisplayKey = FString::Printf(TEXT("DisplayName_NewEnumerator%d"), SlotIndex);
 	Enum->SetMetaData(*DisplayKey, *EntryName);
@@ -756,9 +747,7 @@ int32 UPhotonBPLibrary::EnumAddEntry(UUserDefinedEnum* Enum, FString EntryName)
 FString UPhotonBPLibrary::DataTableToJsonString(UDataTable* DataTable)
 {
 	if (!DataTable) return TEXT("[]");
-	FString JsonStr;
-	DataTable->GetTableAsJSON(JsonStr);
-	return JsonStr;
+	return DataTable->GetTableAsJSON();
 }
 
 TArray<FName> UPhotonBPLibrary::DataTableGetRowNames(UDataTable* DataTable)
@@ -791,44 +780,10 @@ FString UPhotonBPLibrary::StructGetFields(UUserDefinedStruct* Struct)
 		if (!bFirst) Result += TEXT(",");
 		bFirst = false;
 		Result += FString::Printf(TEXT("{\"name\":\"%s\",\"type\":\"%s\"}"),
-			*Prop->GetName(),
-			*Prop->GetCPPType());
+			*Prop->GetName(), *Prop->GetCPPType());
 	}
 	Result += TEXT("]");
 	return Result;
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// COMPONENT & INTERFACE
-// ═══════════════════════════════════════════════════════════════════════════════
-
-bool UPhotonBPLibrary::AddComponent(UBlueprint* Blueprint, UClass* ComponentClass, FName ComponentName)
-{
-	if (!Blueprint || !ComponentClass) return false;
-	if (!Blueprint->SimpleConstructionScript) return false;
-
-	USCS_Node* NewNode = Blueprint->SimpleConstructionScript->CreateNode(ComponentClass, ComponentName);
-	if (!NewNode) return false;
-
-	Blueprint->SimpleConstructionScript->AddNode(NewNode);
-	FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
-	return true;
-}
-
-bool UPhotonBPLibrary::AddInterface(UBlueprint* Blueprint, UClass* InterfaceClass)
-{
-	if (!Blueprint || !InterfaceClass) return false;
-
-	for (const FBPInterfaceDescription& Desc : Blueprint->ImplementedInterfaces)
-	{
-		if (Desc.Interface == InterfaceClass) return true;
-	}
-
-	FBPInterfaceDescription NewInterface;
-	NewInterface.Interface = InterfaceClass;
-	Blueprint->ImplementedInterfaces.Add(NewInterface);
-	FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
-	return true;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -839,43 +794,18 @@ bool UPhotonBPLibrary::CompileAnimBlueprint(UBlueprint* AnimBlueprint)
 {
 	if (!AnimBlueprint) return false;
 	FKismetEditorUtilities::CompileBlueprint(AnimBlueprint);
-	return !AnimBlueprint->Status == BS_Error;
+	return (AnimBlueprint->Status != BS_Error);
 }
 
 FString UPhotonBPLibrary::AddAnimGraphNode(UBlueprint* AnimBlueprint, FString NodeClassName, int32 NodeX, int32 NodeY)
 {
-	if (!AnimBlueprint) return TEXT("");
-
-	UEdGraph* AnimGraph = nullptr;
-	for (UEdGraph* Graph : AnimBlueprint->FunctionGraphs)
-	{
-		if (Graph && Graph->GetName().Contains(TEXT("AnimGraph")))
-		{
-			AnimGraph = Graph;
-			break;
-		}
-	}
-	if (!AnimGraph) return TEXT("");
-
-	UClass* NodeClass = FindObject<UClass>(ANY_PACKAGE, *NodeClassName);
-	if (!NodeClass) return TEXT("");
-
-	UEdGraphNode* NewNode = NewObject<UEdGraphNode>(AnimGraph, NodeClass);
-	if (!NewNode) return TEXT("");
-
-	NewNode->NodePosX = NodeX;
-	NewNode->NodePosY = NodeY;
-	NewNode->CreateNewGuid();
-	AnimGraph->AddNode(NewNode, true, false);
-	FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(AnimBlueprint);
-
-	return NewNode->NodeGuid.ToString();
+	// Requires AnimationGraph editor module internals not exposed at this level.
+	// Return empty — Python layer should fall back to manual approach.
+	return TEXT("");
 }
 
 FString UPhotonBPLibrary::AddStateToStateMachine(UBlueprint* AnimBlueprint, FString StateMachineName, FString StateName, int32 NodeX, int32 NodeY)
 {
-	// State machine editing requires AnimationGraph module internals.
-	// Return empty — caller should check and fall back to manual graph editing.
 	return TEXT("");
 }
 
@@ -901,7 +831,6 @@ bool UPhotonBPLibrary::SetStateAnimation(UBlueprint* AnimBlueprint, FString Stat
 FString UPhotonBPLibrary::GetMaterialExpressions(UMaterial* Material)
 {
 	if (!Material) return TEXT("[]");
-
 	FString Result = TEXT("[");
 	bool bFirst = true;
 	for (UMaterialExpression* Expr : Material->GetExpressions())
@@ -922,85 +851,41 @@ FString UPhotonBPLibrary::GetMaterialExpressions(UMaterial* Material)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// ENHANCED INPUT ASSET CREATION
+// ENHANCED INPUT & PCG ASSET CREATION
 // ═══════════════════════════════════════════════════════════════════════════════
+
+static UObject* CreateAssetByClassName(FString AssetName, FString SavePath, FString ClassName, FString ScriptPath)
+{
+	IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
+	UClass* AssetClass = LoadObject<UClass>(nullptr, *ScriptPath);
+	if (!AssetClass) return nullptr;
+	UObject* Asset = AssetTools.CreateAsset(AssetName, SavePath, AssetClass, nullptr);
+	if (Asset)
+	{
+		TArray<UPackage*> Pkgs;
+		Pkgs.Add(Asset->GetOutermost());
+		FEditorFileUtils::PromptForCheckoutAndSave(Pkgs, false, false);
+	}
+	return Asset;
+}
 
 FString UPhotonBPLibrary::CreateInputAction(FString AssetName, FString SavePath)
 {
-	IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
-
-	UClass* IAClass = FindObject<UClass>(ANY_PACKAGE, TEXT("InputAction"));
-	if (!IAClass)
-	{
-		IAClass = LoadObject<UClass>(nullptr, TEXT("/Script/EnhancedInput.InputAction"));
-	}
-	if (!IAClass) return TEXT("");
-
-	UFactory* Factory = NewObject<UFactory>(GetTransientPackage(), UFactory::StaticClass());
-	UObject* Asset = AssetTools.CreateAsset(AssetName, SavePath, IAClass, nullptr);
+	UObject* Asset = CreateAssetByClassName(AssetName, SavePath, TEXT("InputAction"), TEXT("/Script/EnhancedInput.InputAction"));
 	if (!Asset) return TEXT("");
-
-	FString AssetPath = FString::Printf(TEXT("%s/%s.%s"), *SavePath, *AssetName, *AssetName);
-	UPackage* Package = Asset->GetOutermost();
-	if (Package)
-	{
-		TArray<UPackage*> PackagesToSave;
-		PackagesToSave.Add(Package);
-		FEditorFileUtils::PromptForCheckoutAndSave(PackagesToSave, false, false);
-	}
-	return AssetPath;
+	return FString::Printf(TEXT("%s/%s.%s"), *SavePath, *AssetName, *AssetName);
 }
 
 FString UPhotonBPLibrary::CreateInputMappingContext(FString AssetName, FString SavePath)
 {
-	IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
-
-	UClass* IMCClass = FindObject<UClass>(ANY_PACKAGE, TEXT("InputMappingContext"));
-	if (!IMCClass)
-	{
-		IMCClass = LoadObject<UClass>(nullptr, TEXT("/Script/EnhancedInput.InputMappingContext"));
-	}
-	if (!IMCClass) return TEXT("");
-
-	UObject* Asset = AssetTools.CreateAsset(AssetName, SavePath, IMCClass, nullptr);
+	UObject* Asset = CreateAssetByClassName(AssetName, SavePath, TEXT("InputMappingContext"), TEXT("/Script/EnhancedInput.InputMappingContext"));
 	if (!Asset) return TEXT("");
-
-	FString AssetPath = FString::Printf(TEXT("%s/%s.%s"), *SavePath, *AssetName, *AssetName);
-	UPackage* Package = Asset->GetOutermost();
-	if (Package)
-	{
-		TArray<UPackage*> PackagesToSave;
-		PackagesToSave.Add(Package);
-		FEditorFileUtils::PromptForCheckoutAndSave(PackagesToSave, false, false);
-	}
-	return AssetPath;
+	return FString::Printf(TEXT("%s/%s.%s"), *SavePath, *AssetName, *AssetName);
 }
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// PCG GRAPH ASSET CREATION
-// ═══════════════════════════════════════════════════════════════════════════════
 
 FString UPhotonBPLibrary::CreatePCGGraph(FString AssetName, FString SavePath)
 {
-	IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
-
-	UClass* PCGClass = FindObject<UClass>(ANY_PACKAGE, TEXT("PCGGraph"));
-	if (!PCGClass)
-	{
-		PCGClass = LoadObject<UClass>(nullptr, TEXT("/Script/PCG.PCGGraph"));
-	}
-	if (!PCGClass) return TEXT("");
-
-	UObject* Asset = AssetTools.CreateAsset(AssetName, SavePath, PCGClass, nullptr);
+	UObject* Asset = CreateAssetByClassName(AssetName, SavePath, TEXT("PCGGraph"), TEXT("/Script/PCG.PCGGraph"));
 	if (!Asset) return TEXT("");
-
-	FString AssetPath = FString::Printf(TEXT("%s/%s.%s"), *SavePath, *AssetName, *AssetName);
-	UPackage* Package = Asset->GetOutermost();
-	if (Package)
-	{
-		TArray<UPackage*> PackagesToSave;
-		PackagesToSave.Add(Package);
-		FEditorFileUtils::PromptForCheckoutAndSave(PackagesToSave, false, false);
-	}
-	return AssetPath;
+	return FString::Printf(TEXT("%s/%s.%s"), *SavePath, *AssetName, *AssetName);
 }
