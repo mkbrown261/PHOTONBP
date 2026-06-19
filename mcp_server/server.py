@@ -1410,14 +1410,33 @@ async def handle_working_tools() -> list[types.TextContent]:  # noqa: C901
         ])),
     ]
 
+    # ── Ping UE first — bail fast if bridge is not up ────────────────────────
+    # Each probe uses run_in_executor (blocking thread). With timeout=30 and
+    # 9 probes the worst case is 270 s — long past the MCP client's patience.
+    # A single cheap ping lets us fail in <3 s instead of hanging silently.
+    loop = asyncio.get_event_loop()
+    try:
+        reachable = await loop.run_in_executor(None, ue._re.ping)
+    except Exception:
+        reachable = False
+
+    if not reachable:
+        return [types.TextContent(type="text", text=(
+            "═══════════════════════════════════════════════════════\n"
+            "  ueos_wt — SKIPPED\n"
+            "═══════════════════════════════════════════════════════\n"
+            "  ❌  UE Remote Control not reachable on port 30010.\n"
+            "  Run ueos_diagnose to investigate.\n"
+            "═══════════════════════════════════════════════════════"
+        ))]
+
     # ── Run each probe, collect results ───────────────────────────────────────
-    # timeout=30 per probe: generous enough for a slow UE response.
-    # We surface the raw output in SCRIPT_CRASH so a thrown exception is
-    # visible instead of silently reporting NO_OUTPUT with an empty string.
+    # timeout=10 per probe: bridge round-trips in <1 s when healthy.
+    # 9 probes x 10 s = 90 s worst case — still within MCP client patience.
     raw: dict[str, dict] = {}
     for group, script in PROBES:
         try:
-            result = await ue.execute_python(script, timeout=30)
+            result = await ue.execute_python(script, timeout=10)
             output = result.get("output", "").strip()
 
             # Find the PASS/FAIL sentinel anywhere in the output
