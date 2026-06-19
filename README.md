@@ -2,61 +2,507 @@
 
 **Version 7.0.0 — Phase 7 Complete: Chaos Physics + PCG + Enhanced Input + MetaSounds**
 
-AI-driven Unreal Engine 5.4 development system. Claude controls the UE editor
-through **339 MCP tools** via the Remote Control API. Zero C++. Pure Python.
+AI-driven Unreal Engine 5.4 development system. Claude controls the UE editor through **339 MCP tools** via the Remote Control API. Zero C++. Pure Python.
 
 ---
 
-## 🖥️ GUI Launcher (Recommended)
+## ⚡ How It Works (Read This First)
 
-Double-click **`UEOS.bat`** on Windows — that's it.
-
-The GUI launcher opens a full desktop application with 5 tabs:
-
-| Tab | What it does |
-|-----|-------------|
-| **Dashboard** | Live status of UE, Tripo, Huanyuan, MetaTailor. Start/Stop MCP server. |
-| **API Keys** | Enter & validate Tripo / Huanyuan / MetaTailor keys. Masked by default. |
-| **Settings** | UE Remote Control host/port, temp directory, log level. |
-| **Claude Setup** | Auto-detects your Claude Desktop config and writes the UEOS entry for you. |
-| **Log** | Live color-coded tail of `ueos.log`. |
-
-> **First launch:** the API Keys tab opens automatically so you can enter your Tripo key and validate it before starting the server.
+UEOS connects **Claude Desktop** to **Unreal Engine 5.4** via three bridges:
 
 ```
-UEOS/
-└── UEOS.bat   ← double-click this
+Claude Desktop
+     │
+     │  MCP protocol (stdio)
+     ▼
+mcp_server/server.py  ←  339 tools registered here
+     │
+     │  HTTP PUT  port 30010
+     ▼
+Unreal Engine 5.4  ←  Remote Control API + Python Script Plugin
 ```
+
+Claude sends commands → UEOS translates them to UE Python scripts → runs them live inside the editor.
+
+### The System Prompt
+
+UEOS has a full behavioral system prompt (`UEOS_SYSTEM_PROMPT.md` — 74KB of UE doctrine, optimization rules, Blueprint standards, and game design patterns). **Claude does not load this automatically.** You must activate it at the start of each conversation:
+
+```
+/ueos
+```
+
+Type `/ueos` in Claude Desktop chat to load the UEOS system prompt. Without this, Claude has all 339 tools available but no UEOS behavioral instructions.
+
+> **Why not auto-inject?** `claude_desktop_config.json` only supports `command`, `args`, `cwd`, and `env` fields for MCP servers — there is no system prompt field in the MCP spec. The cleanest solution is the MCP Prompts API already implemented: type `/ueos` to load it, or paste the contents of `UEOS_SYSTEM_PROMPT.md` into Claude → Settings → Project Instructions for your UEOS project.
 
 ---
 
-## Quick Start (Command Line)
+## 📋 Complete Setup Guide — Chronological Order
+
+Follow these steps **in order**. Do not skip ahead.
+
+---
+
+### STEP 1 — Prerequisites
+
+Before touching UEOS, verify you have:
+
+| Requirement | Version | Where to get it |
+|-------------|---------|-----------------|
+| Windows 10/11 | Any | — |
+| Unreal Engine | 5.4+ | Epic Games Launcher |
+| Python | 3.10+ | https://www.python.org/downloads/ |
+| Claude Desktop | Latest | https://claude.ai/download |
+
+> **Python install tip:** On the Python installer, check **"Add Python to PATH"** before clicking Install. UEOS will not work without this.
+
+---
+
+### STEP 2 — Download / Clone UEOS
+
+**Option A — Git:**
+```bash
+git clone https://github.com/your-repo/ueos.git C:\UEOS
+```
+
+**Option B — ZIP download:**
+1. Download the ZIP from GitHub
+2. Extract to `C:\UEOS` (or any path without spaces)
+
+> The path must not contain spaces (e.g. `C:\Users\John Smith\UEOS` will break things). Use `C:\UEOS` or `C:\Dev\UEOS`.
+
+---
+
+### STEP 3 — Run Setup (Double-Click)
+
+**Double-click `SETUP.bat`** in the UEOS root folder.
+
+What it does automatically:
+1. Checks Python version (3.10+ required)
+2. Installs all pip dependencies (`mcp`, `aiohttp`, `python-dotenv`, etc.)
+3. Writes the UEOS entry into your `claude_desktop_config.json`
+4. Patches UE project settings if a UE project is open
+5. Creates `.env` from template
+6. Launches the GUI dashboard
+
+If Python is missing, `SETUP.bat` downloads and installs Python 3.11.9 automatically, then re-runs itself.
+
+**Expected output:**
+```
+[1/5] Checking Python...       OK: Python 3.11.9
+[2/5] Installing dependencies... OK: All dependencies installed
+[3/5] Configuring Claude Desktop... OK: Claude Desktop config written. Restart Claude Desktop.
+[4/5] Configuring Unreal Engine projects... OK: UE project settings patched.
+[5/5] Finalising...            OK: Setup complete
+```
+
+> If Step 3 shows `NOTE: Claude Desktop not found` — install Claude Desktop first, then run `FIX_CLAUDE_CONFIG.bat`.
+
+---
+
+### STEP 4 — Configure API Keys
+
+After `SETUP.bat` finishes, the GUI launcher opens. Go to the **API Keys** tab.
+
+#### 4a. Tripo API Key (Required for 3D generation)
+1. Go to https://platform.tripo3d.ai
+2. Account → API Keys → Create Key
+3. Copy the key (starts with `tsk_`)
+4. Paste into the **Tripo API Key** field in the GUI
+5. Click **Validate** — it should show your credit balance
+
+#### 4b. Huanyuan3D API Key (Optional)
+1. Go to https://hunyuan.cloud.tencent.com
+2. Create an API key
+3. Paste into the **Huanyuan API Key** field
+
+#### 4c. MetaTailor API Key (Optional — for auto-rigging)
+1. Go to https://metatailor.io
+2. Create an API key
+3. Paste into the **MetaTailor API Key** field
+
+**Or configure via command line:**
+```bash
+python setup/configure.py
+```
+
+This runs an interactive wizard that validates each key as you enter it.
+
+**Where keys are stored:**  
+Keys are saved to `.env` in the UEOS root. This file is git-ignored and never committed.
 
 ```bash
-# 1. Install dependencies
-pip install -r requirements.txt
-
-# 2. Run setup wizard (configures API keys interactively)
-python setup/install.py
-
-# 3. (Optional) Verify all connections
-python setup/verify.py
-
-# 4. Launch the GUI
-python ui/launcher.py
-
-# — OR start the MCP server directly —
-python mcp_server/server.py
+# .env (auto-generated — do not commit)
+TRIPO_API_KEY=tsk_your_key_here
+HUANYUAN_API_KEY=your_key_here
+METATAILOR_API_KEY=your_key_here
+UE_REMOTE_CONTROL_HOST=127.0.0.1
+UE_REMOTE_CONTROL_PORT=30010
+UEOS_ASSET_TEMP_DIR=C:/UEOS/temp
 ```
-
-**In Unreal Engine 5.4:**
-- Enable: Remote Control API plugin
-- Enable: Python Editor Script Plugin
-- Start the server (Remote Control API auto-starts on port 30010)
 
 ---
 
-## Architecture
+### STEP 5 — Configure Unreal Engine 5.4 Plugins
+
+Open your Unreal Engine 5.4 project. Enable these plugins:
+
+**Edit → Plugins → search and enable each:**
+
+| Plugin | Required | Notes |
+|--------|----------|-------|
+| **Python Editor Script Plugin** | ✅ Required | Enables Python execution inside UE |
+| **Remote Control API** | ✅ Required | Enables HTTP control on port 30010 |
+| **Remote Control Logic** | ✅ Required | Supports Remote Control presets |
+| **Editor Scripting Utilities** | ✅ Required | Extended editor scripting |
+| **Niagara** | ✅ Required | Particle system tools |
+
+After enabling all plugins, **restart the UE editor**.
+
+---
+
+### STEP 6 — Configure Remote Control API (Critical)
+
+This step is what actually lets UEOS talk to UE. **Do not skip this.**
+
+1. In UE: **Edit → Project Settings**
+2. In the left panel, scroll to **Plugins → Remote Control API**
+3. Set these values:
+
+| Setting | Value | Why |
+|---------|-------|-----|
+| **Allow remote control of editor** | ✅ Enabled | Must be ON |
+| **Remote Control HTTP Server Port** | `30010` | Default UEOS port |
+| **HTTP Server Bind Address** | `0.0.0.0` | **CRITICAL — set this or connections fail** |
+
+> **Why `0.0.0.0`?** By default UE binds to `127.0.0.1` (localhost only). Setting it to `0.0.0.0` allows connections from any address on the machine, which is required for UEOS to connect reliably across Python environments.
+
+4. Click **Set as Default** to save to project config (not just session)
+5. These settings are saved to `Config/DefaultEngine.ini` in your UE project
+
+---
+
+### STEP 7 — Enable Remote Execution for Python (for Bridge)
+
+Remote Execution is what allows external Python processes to execute scripts inside the UE editor. This is separate from the Remote Control API.
+
+1. In UE: **Edit → Project Settings**
+2. Search for **Python** in the left panel
+3. Find **Python Remote Execution**:
+
+| Setting | Value |
+|---------|-------|
+| **Enable Remote Execution?** | ✅ Enabled |
+| **Multicast Group Endpoint** | `239.0.0.1:6766` (default) |
+| **Multicast Bind Address** | `0.0.0.0` |
+| **Multicast TTL** | `0` |
+
+4. **Restart the UE editor** after changing these settings.
+
+---
+
+### STEP 8 — Verify the Python Bridge is Active
+
+After restarting UE with the plugins and settings enabled, verify the Python bridge is live.
+
+**In UE: Window → Developer Tools → Output Log**
+
+Run this command to confirm the bridge is active:
+
+```python
+import unreal; unreal.log("UEOS bridge active: OK")
+```
+
+**To run it:** In the UE Output Log, click the command bar at the bottom and type:
+```
+py import unreal; unreal.log("UEOS bridge active: OK")
+```
+
+You should see `LogPython: UEOS bridge active: OK` in the Output Log.
+
+**Alternatively, from external Python:**
+```python
+import urllib.request, json
+
+payload = json.dumps({
+    "objectPath": "/Script/PythonScriptPlugin.Default__PythonScriptLibrary",
+    "functionName": "ExecutePythonScript",
+    "parameters": {"PythonScript": "import unreal; print('UEOS_PING:OK')"}
+}).encode()
+
+req = urllib.request.Request(
+    "http://127.0.0.1:30010/remote/object/call",
+    data=payload,
+    headers={"Content-Type": "application/json"},
+    method="PUT"
+)
+with urllib.request.urlopen(req, timeout=5) as resp:
+    print(resp.read().decode())
+```
+
+Expected response: `{"ReturnValue": "", "PythonScript": "import unreal; print('UEOS_PING:OK')"}`
+
+---
+
+### STEP 9 — Configure Claude Desktop
+
+`SETUP.bat` should have already done this. To verify or fix manually:
+
+**Double-click `FIX_CLAUDE_CONFIG.bat`** — it auto-detects your Claude Desktop install location and writes the correct config.
+
+**Manual path:** `%APPDATA%\Claude\claude_desktop_config.json`
+
+The entry UEOS writes looks like this:
+```json
+{
+  "mcpServers": {
+    "ueos": {
+      "command": "C:\\Python311\\python.exe",
+      "args": ["C:\\UEOS\\mcp_server\\server.py"],
+      "cwd": "C:\\UEOS\\mcp_server"
+    }
+  }
+}
+```
+
+> Paths are auto-generated based on your actual Python and UEOS locations. Do not hardcode these manually — always use `FIX_CLAUDE_CONFIG.bat` or `python setup/inject_claude_config.py`.
+
+**After writing the config:**
+1. **Fully quit Claude Desktop** — right-click the tray icon → Quit (not just close the window)
+2. Reopen Claude Desktop
+3. Look for the 🔌 MCP icon in the chat input — it should show UEOS tools
+
+---
+
+### STEP 10 — Verify Everything Works
+
+#### 10a. Run UEOS Status
+
+In Claude Desktop, ask:
+```
+run ueos_status
+```
+
+Expected output:
+```
+✓ Unreal Engine 5.4.x connected
+  Project: YourProjectName
+  Level: /Game/Maps/TestMap
+
+✓ Tripo API connected
+  Balance: 1234 credits
+
+✓ UEOS MCP Server running
+  Tools: 339 registered
+```
+
+If UE is not running, UE status shows as disconnected — that's fine, start UE and try again.
+
+#### 10b. Run UEOS Diagnose (if ueos_status fails)
+
+```
+run ueos_diagnose
+```
+
+`ueos_diagnose` fires a raw HTTP PUT directly to UE's Remote Control API and shows you the **exact** response — status code, headers, and body. This tells you precisely what's failing:
+
+| Error | Meaning | Fix |
+|-------|---------|-----|
+| `Connection refused` | UE not running or port wrong | Start UE, check port 30010 |
+| `403 Forbidden` | Remote Control not enabled | Enable in Project Settings → Plugins → Remote Control API |
+| `404 Not Found` | Wrong endpoint or UE version | Verify UE 5.4 |
+| `400 Bad Request` | Python Plugin not enabled | Enable Python Editor Script Plugin |
+| Timeout | Bind address wrong | Set Bind Address to `0.0.0.0` |
+
+#### 10c. Load the UEOS System Prompt
+
+At the start of any UEOS conversation, type:
+```
+/ueos
+```
+
+This loads the full 74KB UEOS behavioral system prompt via the MCP Prompts API. You'll see Claude acknowledge it and enter UEOS mode.
+
+---
+
+## 🖥️ GUI Launcher
+
+After first-time setup, use **`UEOS.bat`** (not `SETUP.bat`) for daily use.
+
+Double-click `UEOS.bat` → opens the UEOS dashboard with 5 tabs:
+
+| Tab | Purpose |
+|-----|---------|
+| **Dashboard** | Live connection status (UE, Tripo, Huanyuan, MetaTailor). Start/Stop MCP server. |
+| **API Keys** | Enter and validate all API keys. Values masked by default. |
+| **Settings** | UE Remote Control host/port, temp dir for downloaded assets, log level. |
+| **Claude Setup** | Auto-detects Claude Desktop config and writes/updates the UEOS entry. |
+| **Log** | Live color-coded tail of `ueos.log`. Shows all tool calls in real time. |
+
+---
+
+## 🔧 Diagnostic Tools Reference
+
+### `ueos_status`
+High-level health check. Shows:
+- UE connection state (host, port, engine version, project name)
+- Tripo API (connected + credit balance)
+- Huanyuan3D (connected or not configured)
+- MetaTailor (connected or not configured)
+- MCP server tool count
+
+**When to use:** First check after opening Claude. Quick sanity test.
+
+### `ueos_diagnose`
+Raw HTTP diagnostic. Fires a direct `PUT /remote/object/call` to UE and returns:
+- HTTP status code
+- Response headers
+- Full response body
+- Timing
+
+**When to use:** When `ueos_status` says UE is disconnected. Shows you exactly what UE is rejecting and why.
+
+### `ueos_run_python`
+Execute arbitrary Python code inside the UE 5.4 editor. Full access to `unreal` module.
+
+```python
+# Example: list all assets in /Game/Characters
+import unreal
+ar = unreal.AssetRegistryHelpers.get_asset_registry()
+assets = ar.get_assets_by_path('/Game/Characters', recursive=True)
+print(f"UEOS_RESULT:{[str(a.asset_name) for a in assets]}")
+```
+
+Use `UEOS_RESULT:` prefix for return values, `UEOS_ERROR:` for errors.
+
+**When to use:** Custom operations not covered by existing tools. Advanced debugging.
+
+---
+
+## 🔑 System Prompt Delivery — Technical Details
+
+### The Problem
+`claude_desktop_config.json` only supports these MCP server fields:
+```json
+{
+  "mcpServers": {
+    "ueos": {
+      "command": "...",
+      "args": [...],
+      "cwd": "...",
+      "env": {}
+    }
+  }
+}
+```
+
+There is **no `systemPrompt` field** in the MCP spec. Claude Desktop does not auto-inject system prompts from the config file.
+
+### Current Solution — MCP Prompts API
+UEOS serves its system prompt via the **MCP Prompts API** (`@server.list_prompts` / `@server.get_prompt` in `server.py` lines 156–196).
+
+In Claude Desktop: type **`/ueos`** → Claude fetches `UEOS_SYSTEM_PROMPT.md` at runtime and loads it as context.
+
+### Permanent Solution — Project Instructions
+For automatic loading every conversation:
+
+1. In Claude Desktop: **Settings → Projects → New Project** (or open your UEOS project)
+2. Click **Project Instructions**
+3. Paste the contents of `UEOS_SYSTEM_PROMPT.md`
+
+This makes the system prompt load automatically for every conversation in that project — no `/ueos` required.
+
+### Summary
+
+| Method | Auto-loads? | How to use |
+|--------|-------------|-----------|
+| `/ueos` command | ❌ Manual | Type `/ueos` at start of each chat |
+| Project Instructions | ✅ Automatic | Paste prompt into Claude project once |
+| `claude_desktop_config.json` | ❌ Not possible | No system prompt field in MCP spec |
+
+---
+
+## ⚠️ Common Problems & Fixes
+
+### "Claude doesn't see any UEOS tools"
+1. Check that `claude_desktop_config.json` has the `ueos` entry → run `FIX_CLAUDE_CONFIG.bat`
+2. **Fully quit and reopen** Claude Desktop (right-click tray → Quit)
+3. Check the 🔌 MCP icon appears in the chat input bar
+
+### "ueos_status shows UE disconnected"
+1. Make sure Unreal Engine 5.4 is running with your project open
+2. Run `ueos_diagnose` — check the exact error
+3. Verify Remote Control API is enabled: **Edit → Project Settings → Remote Control API → Allow remote control of editor = ON**
+4. Verify Bind Address is `0.0.0.0` (not `127.0.0.1`)
+5. Verify port is `30010`
+6. Check Windows Firewall isn't blocking port 30010
+
+### "Python not found" during SETUP.bat
+- Reinstall Python from https://www.python.org/downloads/
+- **Check "Add Python to PATH"** during install
+- Run `SETUP.bat` again
+
+### "Permission denied" writing claude_desktop_config.json
+- Run `FIX_CLAUDE_CONFIG.bat` as Administrator (right-click → Run as administrator)
+- Or manually edit `%APPDATA%\Claude\claude_desktop_config.json`
+
+### "Tripo validation fails"
+- Keys start with `tsk_` — verify you copied the full key
+- Check your Tripo account has credits remaining
+- Run `python setup/configure.py --tripo` to re-enter the key
+
+### "/ueos command not recognized in Claude"
+- The MCP server is not connected — check steps above
+- Try typing `/` in Claude Desktop to see all available prompts
+- Run `ueos_status` to confirm server is running
+
+### "Claude doesn't have UEOS context / acts confused"
+- You forgot to type `/ueos` at the start of the conversation
+- Or use Project Instructions (permanent fix — see above)
+
+---
+
+## 🚀 Daily Usage Workflow
+
+Each day you use UEOS:
+
+```
+1. Open Unreal Engine 5.4 (with your project)
+2. Open Claude Desktop
+3. Start a new conversation
+4. Type: /ueos    ← loads system prompt
+5. Type: run ueos_status   ← confirms everything is connected
+6. Start building
+```
+
+---
+
+## 🛠️ Re-Configuration Commands
+
+```bash
+# Update API keys interactively
+python setup/configure.py
+
+# Update only Tripo key
+python setup/configure.py --tripo
+
+# Reset all keys and start fresh
+python setup/configure.py --reset
+
+# Show Claude Desktop config (without writing it)
+python setup/configure.py --claude
+
+# Auto-write Claude Desktop config
+python setup/inject_claude_config.py
+
+# Or double-click
+FIX_CLAUDE_CONFIG.bat
+```
+
+---
+
+## 📐 Architecture
 
 ```
 Claude Desktop
@@ -79,10 +525,10 @@ mcp_server/server.py          ← 339 tools registered
      ├── tools/gameplay_ability.py ← 20 tools: GAS, AttributeSets, Effects, Cues (Phase 6)
      ├── tools/environment_query.py ← 20 tools: EQS queries, generators, tests  (Phase 6)
      ├── tools/navmesh.py         ← 17 tools: NavMesh, NavAreas, Links, AI move (Phase 6)
-     ├── tools/chaos_physics.py   ← 25 tools: GeometryCollections, Fracture, Cloth, Fields ← NEW Phase 7
-     ├── tools/pcg.py             ← 21 tools: PCG Graphs, samplers, spawners, volumes       ← NEW Phase 7
-     ├── tools/enhanced_input.py  ← 18 tools: InputActions, IMCs, presets, player binding   ← NEW Phase 7
-     └── tools/metasound.py       ← 17 tools: MetaSound Source/Patch, attenuation, LFO, bus ← NEW Phase 7
+     ├── tools/chaos_physics.py   ← 25 tools: GeometryCollections, Fracture, Cloth, Fields (Phase 7)
+     ├── tools/pcg.py             ← 21 tools: PCG Graphs, samplers, spawners, volumes       (Phase 7)
+     ├── tools/enhanced_input.py  ← 18 tools: InputActions, IMCs, presets, player binding   (Phase 7)
+     └── tools/metasound.py       ← 17 tools: MetaSound Source/Patch, attenuation, LFO, bus (Phase 7)
      │
      ├── remote_control/client.py  ← UE 5.4 HTTP client w/ retry logic
      ├── api_clients/tripo.py      ← Tripo REST API
@@ -97,7 +543,7 @@ Unreal Engine 5.4
 
 ---
 
-## Tool Inventory
+## 📦 Tool Inventory
 
 ### 🔵 Blueprint Tools (17)
 
@@ -198,590 +644,350 @@ Unreal Engine 5.4
 | `scene_add_sky_atmosphere` | Add SkyAtmosphere component |
 | `scene_add_fog` | Add ExponentialHeightFog with volumetric options |
 | `scene_add_post_process` | Add PostProcessVolume with all settings |
-| `scene_add_camera` | Add CameraActor with DOF and FOV |
-| `scene_set_world_settings` | Edit gravity, kill-z, game mode |
-| `scene_add_trigger` | Add BoxTriggerVolume |
-| `scene_save_level` | Save current level |
+| `scene_set_skylight` | Configure SkyLight with HDRI capture |
+| `scene_add_decal` | Place DecalActor with material |
+| `scene_add_camera` | Add CineCameraActor with lens settings |
+| `scene_take_screenshot` | Capture viewport to PNG |
 
-### 🗄️ Data Tools (15)
-
-| Tool | Description |
-|------|-------------|
-| `data_create_struct` | Create UserDefinedStruct with typed fields |
-| `data_add_struct_field` | Add field to existing struct |
-| `data_get_struct_fields` | Read all fields from a struct |
-| `data_create_enum` | Create UserDefinedEnum with values |
-| `data_add_enum_value` | Append value to existing enum |
-| `data_get_enum_values` | Read all values from an enum |
-| `data_create_datatable` | Create empty DataTable with row struct |
-| `data_add_row` | Add/update row in DataTable |
-| `data_get_row` | Read one row as JSON |
-| `data_get_all_rows` | Dump entire DataTable as JSON |
-| `data_delete_row` | Remove a row |
-| `data_import_csv` | Import CSV file as DataTable |
-| `data_create_curve_table` | Create CurveTable with float curves |
-| `data_get_curve` | Read curve keys from CurveTable |
-| `data_create_data_asset` | Create PrimaryDataAsset instance |
-
-**Supported struct field types:**
-`bool` `byte` `int` `int32` `int64` `float` `double` `string` `name` `text`
-`vector` `vector2d` `vector4` `rotator` `transform` `color` `linear_color` `quat`
-`soft_object` `soft_class` `object` `class` `actor` `gameplay_tag` `datetime` `guid`
-
-### 🎬 Animation Tools (22)
+### 📊 Data Tools (15)
 
 | Tool | Description |
 |------|-------------|
-| `anim_create_anim_blueprint` | Create AnimBlueprint for a skeleton |
-| `anim_set_anim_graph_variable` | Add/update variable in AnimBP (Speed, IsFalling, etc.) |
-| `anim_create_state_machine` | Add State Machine node to AnimBP Anim Graph |
-| `anim_add_state` | Add state to State Machine (Idle, Walk, Run, Jump…) |
-| `anim_add_transition` | Add transition rule between two states |
-| `anim_set_state_animation` | Bind AnimSequence or BlendSpace to a state |
-| `anim_add_blend_tree` | Insert weighted blend tree inside a state |
-| `anim_create_blend_space` | Create 2D BlendSpace (Speed × Direction) |
-| `anim_create_blend_space_1d` | Create 1D BlendSpace (single axis) |
-| `anim_add_blend_space_sample` | Add animation sample to BlendSpace |
-| `anim_create_montage` | Create AnimMontage from AnimSequence |
-| `anim_add_montage_section` | Add named section to montage (WindUp, HitFrame…) |
-| `anim_add_montage_notify` | Add AnimNotify to montage track |
-| `anim_set_montage_slot` | Set slot (DefaultSlot, UpperBody, FullBody) |
-| `anim_get_montage_info` | Inspect montage sections, notifies, slots |
-| `anim_list_sequences` | List all AnimSequences for a skeleton |
-| `anim_get_sequence_info` | Get length/rate/notifies for a sequence |
-| `anim_add_notify_to_sequence` | Add AnimNotify to raw AnimSequence |
-| `anim_retarget_pose` | Set retarget pose on skeleton |
-| `anim_create_ik_rig` | Create IKRig Definition asset |
-| `anim_set_ik_goal` | Add IK goal to IKRig (LeftFoot, RightHand…) |
-| `anim_compile_anim_blueprint` | Force compile AnimBP, return errors/warnings |
+| `data_create_struct` | Create UStruct with typed fields |
+| `data_create_enum` | Create UEnum with named values |
+| `data_create_datatable` | Create DataTable with row struct |
+| `data_add_rows` | Add/update rows via JSON array |
+| `data_get_rows` | Read all rows from DataTable |
+| `data_delete_rows` | Delete rows by name |
+| `data_create_curve` | Create CurveFloat/Vector/Color |
+| `data_add_curve_keys` | Add keyframes to a curve |
+| `data_create_primary_asset` | Create Primary Data Asset |
+| `data_create_save_game` | Create SaveGame class |
+| `data_create_game_instance` | Create GameInstance subclass |
+| `data_set_variable` | Set variable on a Blueprint CDO |
+| `data_get_variable` | Get variable from Blueprint CDO |
+| `data_list` | List all data assets in path |
+| `data_delete` | Delete data asset |
 
-**Blend Space axis presets:** `speed` `direction` `yaw` `lean` `aim_pitch` `aim_yaw`
-
----
-
-### 🖼️ UMG Widget Tools (20) — NEW Phase 4
+### 🎭 Animation Tools (22)
 
 | Tool | Description |
 |------|-------------|
-| `umg_create_widget` | Create a new WidgetBlueprint asset |
-| `umg_add_text` | Add TextBlock widget to canvas panel |
-| `umg_add_button` | Add Button widget with child label text |
-| `umg_add_image` | Add Image widget, optionally bind Texture2D |
-| `umg_add_progress_bar` | Add ProgressBar with fill color and percent |
-| `umg_add_slider` | Add Slider widget with min/max/value |
-| `umg_add_input_field` | Add EditableTextBox input widget |
-| `umg_add_checkbox` | Add CheckBox widget with label |
-| `umg_add_combobox` | Add ComboBoxString with option list |
-| `umg_add_scroll_box` | Add ScrollBox container widget |
-| `umg_add_canvas_panel` | Add nested CanvasPanel |
-| `umg_add_horizontal_box` | Add HorizontalBox layout container |
-| `umg_add_vertical_box` | Add VerticalBox layout container |
-| `umg_add_overlay` | Add Overlay container widget |
-| `umg_add_named_slot` | Add NamedSlot for child widget injection |
-| `umg_bind_variable` | Add Blueprint variable for data binding |
-| `umg_add_widget_animation` | Add named UMG animation track |
-| `umg_set_widget_style` | Update style properties (font, color, size) |
-| `umg_create_hud` | Build complete HUD from preset template |
-| `umg_compile_widget` | Compile and save WidgetBlueprint |
+| `anim_create_blueprint` | Create AnimBlueprint for skeleton |
+| `anim_add_variable` | Add variable (float/bool/int/vector) |
+| `anim_create_state_machine` | Create state machine in AnimBP |
+| `anim_add_state` | Add state with animation asset |
+| `anim_add_transition` | Add transition with condition |
+| `anim_create_blendspace` | Create BlendSpace1D or 2D |
+| `anim_add_blendspace_sample` | Add sample point to BlendSpace |
+| `anim_create_montage` | Create AnimMontage from sequence |
+| `anim_add_montage_section` | Add named section |
+| `anim_add_notify` | Add AnimNotify at time point |
+| `anim_add_notify_state` | Add notify state with begin/end |
+| `anim_create_ikrig` | Create IK Rig for skeleton |
+| `anim_add_ik_goal` | Add IK goal (foot, hand, head) |
+| `anim_create_ikretargeter` | Create IK Retargeter |
+| `anim_set_retarget_pose` | Set retarget reference pose |
+| `anim_compile` | Compile AnimBlueprint |
+| `anim_get_info` | Read AnimBP structure |
+| `anim_list` | List animation assets |
+| `anim_set_root_motion` | Enable/configure root motion |
+| `anim_add_layered_blend` | Add Layered Blend per Bone node |
+| `anim_add_aim_offset` | Add AimOffset asset and node |
+| `anim_set_physics_blend` | Set physical animation blending |
 
-**HUD presets:** `fps` · `rpg` · `main_menu` · `pause_menu` · `inventory`
-
-**Anchor presets:** `top_left` · `top_center` · `top_right` · `center_left` · `center` · `center_right` · `bottom_left` · `bottom_center` · `bottom_right` · `full_stretch`
-
----
-
-### 🎥 Sequencer Tools (18) — NEW Phase 4
+### 🖼️ UMG Widget Tools (20)
 
 | Tool | Description |
 |------|-------------|
-| `seq_create_sequence` | Create new LevelSequence asset with fps/duration |
-| `seq_set_playback_range` | Set start/end frames on a sequence |
-| `seq_add_camera_cut_track` | Add CameraCutTrack to sequence |
-| `seq_add_camera_cut` | Add camera cut section (start→end, camera binding) |
-| `seq_add_actor_track` | Bind a world actor to the sequence |
-| `seq_add_transform_key` | Set location/rotation/scale keyframe on actor binding |
-| `seq_add_property_track` | Add bool/float/color property track on actor component |
-| `seq_add_property_key` | Set property value keyframe on property track |
-| `seq_add_audio_track` | Add audio track to sequence |
-| `seq_add_audio_section` | Place SoundBase at time offset with volume/pitch |
-| `seq_add_fade_track` | Add MovieSceneFadeTrack (black screen in/out) |
-| `seq_add_fade_key` | Set fade alpha value at frame |
-| `seq_add_sub_sequence` | Embed child LevelSequence as sub-sequence track |
-| `seq_add_event_track` | Add event track for Blueprint event triggers |
-| `seq_add_event_key` | Add event key at frame to fire Blueprint event |
-| `seq_list_tracks` | List all tracks in a sequence (type, sections) |
-| `seq_get_info` | Full sequence info: fps, range, bindings, tracks |
-| `seq_play_in_editor` | Open sequence in Sequencer and play in editor |
+| `umg_create_widget` | Create Widget Blueprint |
+| `umg_add_widget` | Add widget element (Button, Text, Image…) |
+| `umg_set_property` | Set widget property |
+| `umg_bind_event` | Bind widget event to function |
+| `umg_add_animation` | Add UMG animation |
+| `umg_set_anchors` | Set widget anchors and alignment |
+| `umg_add_canvas_panel` | Add CanvasPanel root |
+| `umg_add_vertical_box` | Add VerticalBox layout |
+| `umg_add_horizontal_box` | Add HorizontalBox layout |
+| `umg_add_overlay` | Add Overlay container |
+| `umg_add_scroll_box` | Add ScrollBox |
+| `umg_add_progress_bar` | Add ProgressBar |
+| `umg_add_text_block` | Add TextBlock |
+| `umg_add_image` | Add Image widget |
+| `umg_add_button` | Add Button with text |
+| `umg_build_hud` | Build full HUD preset (health/ammo/minimap) |
+| `umg_build_menu` | Build main menu preset (Play/Settings/Quit) |
+| `umg_build_inventory` | Build grid inventory preset |
+| `umg_build_dialogue` | Build dialogue box preset |
+| `umg_compile` | Compile Widget Blueprint |
 
----
-
-### 🌲 Behavior Tree Tools (17) — NEW Phase 4
-
-| Tool | Description |
-|------|-------------|
-| `bt_create_blackboard` | Create BlackboardData asset |
-| `bt_add_blackboard_key` | Add typed key to Blackboard (object/vector/bool/float/int/string/name) |
-| `bt_get_blackboard_keys` | Read all keys from a Blackboard |
-| `bt_create_behavior_tree` | Create BehaviorTree asset, optionally bind Blackboard |
-| `bt_add_selector` | Add Selector composite node (tries children until one succeeds) |
-| `bt_add_sequence` | Add Sequence composite node (runs children in order) |
-| `bt_add_parallel` | Add SimpleParallel composite node |
-| `bt_add_task` | Add built-in task node (MoveTo, Wait, RotateTo, etc.) |
-| `bt_add_decorator` | Add decorator to composite (Blackboard check, Loop, Timer, etc.) |
-| `bt_add_service` | Add service to composite (run on tick while active) |
-| `bt_create_custom_task` | Create new BTTask_BlueprintBase asset with custom logic |
-| `bt_create_custom_decorator` | Create new BTDecorator_BlueprintBase asset |
-| `bt_create_custom_service` | Create new BTService_BlueprintBase asset |
-| `bt_set_ai_controller` | Configure AIController on a Character Blueprint |
-| `bt_get_tree_info` | Inspect BT structure: composites, tasks, decorators |
-| `bt_create_ai_character` | Create full AI character: BP + Controller + BT + BB |
-| `bt_create_patrol_tree` | Build complete patrol Behavior Tree in one call |
-
-**Built-in tasks:** `move_to` · `wait` · `rotate_to` · `run_eqs` · `play_anim` · `play_sound` · `clear_bb_value` · `make_noise` · `move_directly_toward` · `set_bb_value` · `finish_with_result`
-
-**Built-in decorators:** `blackboard` · `loop` · `timer` · `cone_check` · `force_success` · `does_path_exist` · `is_at_location` · `cooldown` · `gameplay_tag` · `compare_bb_entries` · `time_limit`
-
-**Built-in services:** `default_focus` · `run_eqs` · `update_cooldown` · `gameplay_tag_condition`
-
-**Blackboard key types:** `object` · `vector` · `bool` · `float` · `int` · `string` · `name` · `enum` · `rotator` · `class`
-
----
-
-### 🪩 Editor Utility Widget Tools (20) — NEW Phase 5
+### 🎬 Sequencer Tools (18)
 
 | Tool | Description |
 |------|-------------|
-| `ew_create_utility_widget` | Create EditorUtilityWidget Blueprint asset |
-| `ew_open_panel` | Open EUW as docked tab in the UE editor |
-| `ew_close_panel` | Close a registered EUW tab |
-| `ew_list_panels` | List all EUW panels in a content path |
-| `ew_add_text_to_panel` | Add TextBlock widget to EUW canvas |
-| `ew_add_button_to_panel` | Add Button with optional on-click Python script |
-| `ew_add_progress_bar_to_panel` | Add ProgressBar (loading/import indicators) |
-| `ew_add_list_view` | Add scrollable item list (ScrollBox + VerticalBox) |
-| `ew_add_tab_widget` | Add WidgetSwitcher tabbed container |
-| `ew_set_panel_title` | Rename the docked tab label |
-| `ew_compile_panel` | Compile and save EUW Blueprint |
-| `ew_add_tool_menu_entry` | Add entry to UE menus (Tools / Window / Help) |
-| `ew_remove_tool_menu_entry` | Remove a custom menu entry |
-| `ew_post_status_bar_message` | Post text + progress to UE status bar |
-| `ew_create_ueos_panel` | **Build the full 5-tab UEOS control panel** in one call |
-| `ew_refresh_ueos_status` | Force-refresh UEOS status indicators in the panel |
-| `ew_add_property_inspector` | Add Details View (property inspector) to an EUW |
-| `ew_add_output_log_widget` | Add scrollable read-only log text widget |
-| `ew_register_on_tick` | Bind Blueprint function to Editor tick event |
-| `ew_unregister_on_tick` | Remove Editor tick binding |
+| `seq_create` | Create Level Sequence |
+| `seq_add_camera_cut` | Add camera cut track |
+| `seq_add_actor_track` | Add actor binding track |
+| `seq_add_transform_track` | Add transform keyframe track |
+| `seq_add_property_track` | Add property keyframe track |
+| `seq_add_audio_track` | Add audio track |
+| `seq_add_event_track` | Add event track |
+| `seq_add_fade` | Add fade in/out |
+| `seq_set_duration` | Set sequence duration |
+| `seq_set_fps` | Set frame rate |
+| `seq_add_subsequence` | Nest sub-sequence |
+| `seq_add_camera` | Add CineCamera actor + track |
+| `seq_set_camera_lens` | Set focal length, aperture, focus |
+| `seq_add_cine_actor` | Add actor with cinematic movement |
+| `seq_get_info` | Read sequence structure |
+| `seq_render` | Trigger movie render |
+| `seq_list` | List sequences in path |
+| `seq_delete` | Delete sequence |
 
-**UEOS Panel — 5 tabs:**
-
-| Tab | Contents |
-|-----|----------|
-| **Status** | Live connection dots (UE/Tripo/Huanyuan/MetaTailor) · phase summary · Refresh button |
-| **Tools** | Category grid (19 categories · 339 tools) · search box |
-| **Log** | Scrollable operation log · Clear/Copy buttons |
-| **Settings** | UE host/port · API key inputs · log level picker · Save/Reset |
-| **Pipeline** | Concept → character one-click launcher · service picker · progress bar |
-
-**Install the panel from UE Python console (no MCP needed):**
-```python
-import sys, importlib
-sys.path.insert(0, r"C:\UEOS\ue_scripts")
-import editor_widget_utils as ewu; importlib.reload(ewu)
-ewu.ueos_install_panel()          # creates + opens panel + adds Tools menu entry
-```
-
-**Or via Claude Desktop:**
-```
-"Create the UEOS control panel"
-→ calls ew_create_ueos_panel() → 5-tab dockable panel opens in UE immediately
-```
-
----
-
-### ⚡ Gameplay Ability System Tools (20) — Phase 6
+### 🤖 Behavior Tree Tools (17)
 
 | Tool | Description |
 |------|-------------|
-| `gas_create_ability_system_component` | Add ASC to a Blueprint actor with replication mode |
-| `gas_setup_ability_set` | Bundle abilities/effects/attribute sets into a UAbilitySet Data Asset |
-| `gas_grant_ability` | Grant a GameplayAbility to an actor's ASC at a given level |
-| `gas_revoke_ability` | Remove a granted ability by class or GameplayTag |
-| `gas_list_granted_abilities` | List all abilities on an actor's ASC |
-| `gas_create_gameplay_ability` | Create a new GameplayAbility Blueprint with tags and policies |
-| `gas_set_ability_tags` | Set AbilityTags, ActivationRequired/Blocked, Cancel/Block containers |
-| `gas_add_gameplay_effect_to_ability` | Link a GE to fire when an ability activates |
-| `gas_set_ability_costs` | Define cost GE (deducts Mana/Stamina) for an ability |
-| `gas_set_ability_cooldown` | Define cooldown GE with duration and cooldown tag |
-| `gas_create_gameplay_effect` | Create a GameplayEffect Blueprint (instant/infinite/has_duration) |
-| `gas_set_effect_duration` | Set or scale duration on a has_duration GE |
-| `gas_add_attribute_modifier` | Add Add/Multiply/Divide/Override modifier to a GE |
-| `gas_add_gameplay_cue` | Add a GameplayCue tag to a GE; optionally create cue BP stub |
-| `gas_apply_effect_to_target` | Apply a GE to a target actor in-editor (PIE-compatible) |
-| `gas_create_attribute_set` | Create an AttributeSet Blueprint with default attribute list |
-| `gas_add_attribute` | Add FGameplayAttributeData attributes to an existing AttributeSet |
-| `gas_set_attribute_defaults` | Set default values for attributes by dict or DataTable |
-| `gas_list_attribute_sets` | List all AttributeSet Blueprints in a content path |
-| `gas_diagnostics` | GAS health-check: all abilities, effects, attr sets, tag registry |
+| `bt_create` | Create BehaviorTree asset |
+| `bt_create_blackboard` | Create Blackboard asset |
+| `bt_add_key` | Add Blackboard key (object/vector/bool/float/int/string/enum) |
+| `bt_add_selector` | Add Selector composite |
+| `bt_add_sequence` | Add Sequence composite |
+| `bt_add_parallel` | Add Parallel composite |
+| `bt_add_task` | Add built-in task (MoveTo, Wait, PlaySound…) |
+| `bt_add_service` | Add service (update rate, activation) |
+| `bt_add_decorator` | Add decorator (condition, cooldown, loop…) |
+| `bt_create_task` | Create custom BTTask Blueprint |
+| `bt_create_service` | Create custom BTService Blueprint |
+| `bt_create_decorator` | Create custom BTDecorator Blueprint |
+| `bt_set_root` | Set root composite |
+| `bt_assign_blackboard` | Assign Blackboard to BehaviorTree |
+| `bt_get_info` | Read BT structure |
+| `bt_list` | List all BTs in path |
+| `bt_build_patrol` | Full patrol + alert pattern preset |
 
-**Quick GAS setup from UE Python console:**
-```python
-import sys, importlib
-sys.path.insert(0, r"C:\UEOS\ue_scripts")
-import gas_utils as gas; importlib.reload(gas)
-gas.ueos_gas_quick_setup("/Game/Characters/BP_Hero")
-# Creates AS_Base (8 attrs) + ASC on Blueprint + GA_BasicAttack/Sprint/Dodge + starter GEs
-```
-
----
-
-### 🔍 Environment Query System Tools (20) — Phase 6
+### 🛠️ Editor Widget Tools (20)
 
 | Tool | Description |
 |------|-------------|
-| `eqs_create_query` | Create a new EQS query asset with optional default generator |
-| `eqs_list_queries` | List all EQS query assets in a content path |
-| `eqs_get_query_info` | Inspect generators and tests on an EQS query |
-| `eqs_duplicate_query` | Duplicate an EQS query to a new name/location |
-| `eqs_delete_query` | Delete an EQS query asset (warns if referenced) |
-| `eqs_add_actor_generator` | Add ActorsOfClass generator with search radius |
-| `eqs_add_grid_generator` | Add SimpleGrid generator with spacing and projection |
-| `eqs_add_donut_generator` | Add Donut ring generator for flanking / positional queries |
-| `eqs_add_patrol_generator` | Add PatrolPath generator for patrol-route queries |
-| `eqs_add_simple_grid_generator` | Add cover-optimised SimpleGrid preset |
-| `eqs_add_distance_test` | Add Distance test (filter/score with linear/square/inverse equations) |
-| `eqs_add_trace_test` | Add Trace test (LoS check, channel, hit/miss filter) |
-| `eqs_add_dot_test` | Add Dot product test for directional/flanking scoring |
-| `eqs_add_overlap_test` | Add Overlap test (box/sphere/capsule, open-space filter) |
-| `eqs_add_gameplay_tag_test` | Add GameplayTag test (requires/blocks tags on ASC actors) |
-| `eqs_run_eqs_query` | Execute EQS query against a querier actor and return top-N results |
-| `eqs_set_query_on_ai` | Assign EQS query to an AI controller or BT task |
-| `eqs_preview_query_results` | Toggle EQS debug visualization in viewport |
-| `eqs_list_contexts` | List built-in + custom EnvQueryContext classes |
-| `eqs_diagnostics` | EQS health-check: empty queries, missing tests, context issues |
+| `euw_create` | Create Editor Utility Widget Blueprint |
+| `euw_add_button` | Add button with label + onclick callback |
+| `euw_add_text_input` | Add editable text input |
+| `euw_add_dropdown` | Add dropdown selector |
+| `euw_add_checkbox` | Add checkbox |
+| `euw_add_slider` | Add float slider with range |
+| `euw_add_label` | Add static text label |
+| `euw_add_progress_bar` | Add progress bar |
+| `euw_add_list_view` | Add list/tree view |
+| `euw_add_tab_container` | Add tab strip container |
+| `euw_bind_event` | Bind widget event to Python/BP function |
+| `euw_add_menu_entry` | Add entry to top-level Editor menu |
+| `euw_add_toolbar_button` | Add button to editor toolbar |
+| `euw_register_tab` | Register as dockable tab panel |
+| `euw_open` | Open/spawn the widget |
+| `euw_post_status` | Post message to editor status bar |
+| `euw_set_progress` | Update status bar progress value |
+| `euw_build_ueos_panel` | Build the full UEOS control panel |
+| `euw_get_info` | Read widget structure |
+| `euw_list` | List all EUWs in path |
 
-**Quick EQS setup from UE Python console:**
-```python
-import sys, importlib
-sys.path.insert(0, r"C:\UEOS\ue_scripts")
-import eqs_utils as eqs; importlib.reload(eqs)
-eqs.ueos_eqs_quick_setup("/Game/AI/EQS")
-# Creates EQS_FindCover, EQS_FlankEnemy, EQS_PatrolNext, EQS_Retreat, EQS_AttackPosition
-```
-
----
-
-### 🗺️ NavMesh / AI Navigation Tools (17) — Phase 6
+### ⚡ Gameplay Ability System Tools (20)
 
 | Tool | Description |
 |------|-------------|
-| `nav_rebuild_navmesh` | Force full (or dirty-tile) NavMesh rebuild |
-| `nav_set_navmesh_bounds` | Place or resize a NavMeshBoundsVolume |
-| `nav_get_navmesh_info` | Get navmesh actors, bounds volumes, and agent config |
-| `nav_set_navmesh_properties` | Set tile size, cell size, agent radius/height, slope, step height |
-| `nav_find_path` | Find nav path between two world locations; returns waypoints + length |
-| `nav_find_nearest_nav_point` | Snap a world location to the nearest navmesh point |
-| `nav_project_point_to_nav` | Project a point onto the navmesh surface |
-| `nav_check_nav_reachable` | Test if a location is reachable; returns reachable + partial path |
-| `nav_create_nav_area` | Create a custom NavArea Blueprint with traversal cost |
-| `nav_list_nav_areas` | List all built-in and custom NavArea classes |
-| `nav_set_area_on_volume` | Set NavArea on a NavModifierVolume (create if needed) |
-| `nav_get_nav_area_cost` | Get traversal cost and flags for a NavArea class |
-| `nav_create_nav_link_proxy` | Place a NavLinkProxy (jump points, ladders, portals) |
-| `nav_list_nav_links` | List all NavLinkProxy actors in the current level |
-| `nav_set_ai_movement` | Configure AICharacter max speed, acceleration, acceptance radius |
-| `nav_get_ai_path_to_target` | Get current nav path from an AI actor to a target |
-| `nav_diagnostics` | NavMesh health-check: bounds volumes, links, nav system, issues |
+| `gas_add_asc` | Add AbilitySystemComponent to actor |
+| `gas_create_attribute_set` | Create AttributeSet with typed attributes |
+| `gas_create_ability` | Create GameplayAbility Blueprint |
+| `gas_create_effect` | Create GameplayEffect (instant/duration/infinite) |
+| `gas_create_cue` | Create GameplayCue handler |
+| `gas_add_attribute` | Add attribute to AttributeSet |
+| `gas_set_effect_modifier` | Configure Modifier on GameplayEffect |
+| `gas_set_effect_duration` | Set duration and period |
+| `gas_add_tag` | Add GameplayTag to ability/effect |
+| `gas_set_cost` | Set ability cost (GameplayEffect) |
+| `gas_set_cooldown` | Set ability cooldown |
+| `gas_grant_ability` | Grant ability to actor at runtime |
+| `gas_apply_effect` | Apply GameplayEffect to actor |
+| `gas_remove_effect` | Remove GameplayEffect from actor |
+| `gas_get_attribute` | Get current attribute value |
+| `gas_set_attribute` | Set attribute value directly |
+| `gas_create_execution` | Create GameplayEffectExecutionCalculation |
+| `gas_create_mmc` | Create ModifierMagnitudeCalculation |
+| `gas_get_info` | Read GAS setup on actor |
+| `gas_list` | List all GAS assets in path |
 
-**Quick NavMesh setup from UE Python console:**
-```python
-import sys, importlib
-sys.path.insert(0, r"C:\UEOS\ue_scripts")
-import navmesh_utils as nav; importlib.reload(nav)
-nav.ueos_nav_quick_setup(extent=5000.0)
-# Places NavMeshBoundsVolume (10000×10000 cm) and triggers rebuild
-```
-
----
-
-### 💥 Chaos Physics / Destruction Tools (25) — Phase 7
+### 🎯 Environment Query System Tools (20)
 
 | Tool | Description |
 |------|-------------|
-| `phys_create_geometry_collection` | Convert a Static Mesh into a GeometryCollection asset ready for fracture |
-| `phys_fracture_voronoi` | Apply Voronoi fracture to a GeometryCollection (cell count, seed) |
-| `phys_fracture_clustered` | Apply Clustered Voronoi fracture (cluster count, cells per cluster) |
-| `phys_fracture_slice` | Apply uniform plane-cut fracture (slices X/Y/Z) |
-| `phys_set_damage_thresholds` | Set per-level damage thresholds on a GeometryCollection |
-| `phys_set_cluster_connection_type` | Set cluster connectivity type (none/point/delaunay/minimal/all) |
-| `phys_spawn_geometry_collection` | Place a GeometryCollection actor into the current level |
-| `phys_list_geometry_collections` | List all GeometryCollection assets under a content path |
-| `phys_get_geometry_collection_info` | Inspect bone count, levels, and simulation settings |
-| `phys_create_physics_material` | Create a PhysicalMaterial asset (friction, restitution, density) |
-| `phys_list_physics_materials` | List all PhysicalMaterial assets under a content path |
-| `phys_assign_physics_material` | Assign a PhysicalMaterial to a mesh component on an actor |
-| `phys_create_constraint_actor` | Place a PhysicsConstraintActor between two actors |
-| `phys_list_constraints` | List all PhysicsConstraintActors in the current level |
-| `phys_set_constraint_drives` | Configure linear/angular drive settings on a constraint |
-| `phys_add_cloth_component` | Add a Chaos Cloth component to a Skeletal Mesh actor |
-| `phys_set_cloth_config` | Configure cloth solver, gravity scale, damping, and drag |
-| `phys_create_radial_impulse` | Spawn a RadialForceActor at a location (strength, radius, falloff) |
-| `phys_create_field_system` | Create a FieldSystemActor for force/displacement fields |
-| `phys_set_actor_physics` | Enable simulation + set mass, linear/angular damping on an actor |
-| `phys_apply_impulse` | Apply a one-shot world-space impulse to an actor's root component |
-| `phys_set_collision_profile` | Set collision profile and response channels on a component |
-| `phys_set_break_event_notify` | Toggle break-event notifications on a GeometryCollection actor |
-| `phys_reset_geometry_collection` | Reset a fractured GeometryCollection to its initial state |
-| `phys_diagnostics` | Chaos health-check: GC counts, simulation states, material assignments |
+| `eqs_create` | Create EQS Query asset |
+| `eqs_add_generator` | Add generator (ActorsOfClass, Grid, Donut, Circle, Cone) |
+| `eqs_add_test` | Add test (Trace, Distance, Dot, Pathfinding, Overlap) |
+| `eqs_set_test_filter` | Configure test as filter (pass/fail threshold) |
+| `eqs_set_test_score` | Configure test as scorer (weight, clamp) |
+| `eqs_add_context` | Add context (Querier, Target, AllActors, custom) |
+| `eqs_set_generator_params` | Set generator parameters (radius, density, count) |
+| `eqs_create_context` | Create custom EnvQueryContext Blueprint |
+| `eqs_create_test` | Create custom EnvQueryTest Blueprint |
+| `eqs_run_query` | Run EQS query on actor, returns results |
+| `eqs_debug_query` | Run with full debug visualization |
+| `eqs_set_run_mode` | Set SingleBestItem/RandomBestItem/AllMatching |
+| `eqs_build_cover_query` | Build cover-finding query preset |
+| `eqs_build_flank_query` | Build flanking position query preset |
+| `eqs_build_patrol_query` | Build patrol point query preset |
+| `eqs_build_retreat_query` | Build retreat/escape position query preset |
+| `eqs_get_info` | Read EQS query structure |
+| `eqs_list` | List all EQS assets in path |
+| `eqs_delete` | Delete EQS asset |
+| `eqs_duplicate` | Duplicate EQS asset |
 
-**Quick Chaos destruction setup from UE Python console:**
-```python
-import sys, importlib
-sys.path.insert(0, r"C:\UEOS\ue_scripts")
-import chaos_utils as chaos; importlib.reload(chaos)
-chaos.ueos_chaos_quick_setup("/Game/Meshes/SM_Wall", "/Game/Chaos")
-# Converts SM_Wall → GeometryCollection, Voronoi fractures (20 cells),
-# sets damage thresholds, and places actor in level
-```
-
----
-
-### 🌿 Procedural Content Generation Tools (21) — Phase 7
+### 🗺️ NavMesh Tools (17)
 
 | Tool | Description |
 |------|-------------|
-| `pcg_create_graph` | Create a new PCGGraph asset at a content path |
-| `pcg_list_graphs` | List all PCGGraph assets under a content path |
-| `pcg_get_graph_info` | Inspect nodes and edges in a PCGGraph |
-| `pcg_duplicate_graph` | Duplicate a PCGGraph to a new name/location |
-| `pcg_delete_graph` | Delete a PCGGraph asset |
-| `pcg_add_surface_sampler` | Add a Surface Sampler node (point density, seed) |
-| `pcg_add_static_mesh_spawner` | Add a Static Mesh Spawner node (mesh list, density filter) |
-| `pcg_add_actor_spawner` | Add an Actor Spawner node (actor class, spawn settings) |
-| `pcg_add_density_filter` | Add a Density Filter node (lower/upper bound thresholds) |
-| `pcg_add_attribute_node` | Add an Attribute node (set/get/copy PCG attributes) |
-| `pcg_add_transform_points` | Add a Transform Points node (position/rotation/scale offset) |
-| `pcg_add_noise_node` | Add a Density Noise node (frequency, amplitude, seed) |
-| `pcg_add_spline_sampler` | Add a Spline Sampler node (sample along spline, spacing) |
-| `pcg_place_volume` | Place a PCGVolume actor linked to a PCGGraph in the level |
-| `pcg_list_volumes` | List all PCGVolume actors in the current level |
-| `pcg_execute_graph` | Trigger immediate PCG generation on a volume actor |
-| `pcg_cleanup_volume` | Clear all PCG-generated instances from a volume actor |
-| `pcg_create_biome_preset` | Create a complete biome PCGGraph (surface sampler + mesh spawner + density filter) |
-| `pcg_set_landscape_layer_weight` | Add landscape layer weight input node for biome blending |
-| `pcg_get_point_stats` | Return point count and bounding box stats from a PCG volume |
-| `pcg_diagnostics` | PCG health-check: graph count, orphan volumes, execution errors |
+| `nav_place_volume` | Place NavMeshBoundsVolume |
+| `nav_set_agent` | Configure agent (radius, height, step height) |
+| `nav_rebuild` | Trigger full navmesh rebuild |
+| `nav_test_path` | Test if path exists between two points |
+| `nav_get_path` | Get path points from A to B |
+| `nav_create_area` | Create custom NavArea class |
+| `nav_set_area_cost` | Set traversal cost on NavArea |
+| `nav_place_modifier` | Place NavModifierVolume with area class |
+| `nav_create_link` | Create NavLinkProxy (jump/ladder/door) |
+| `nav_set_link_endpoints` | Set link start/end points and direction |
+| `nav_add_smart_link` | Add SmartNavLink with custom logic |
+| `nav_place_invoker` | Place NavMeshBoundsVolume with invoker |
+| `nav_get_stats` | Get navmesh tile count and coverage stats |
+| `nav_get_poly_at` | Get navmesh polygon at world position |
+| `nav_find_nearest` | Find nearest navmesh point to location |
+| `nav_diagnostics` | Full navmesh diagnostic report |
+| `nav_list` | List all nav assets in path |
 
-**Quick PCG biome setup from UE Python console:**
-```python
-import sys, importlib
-sys.path.insert(0, r"C:\UEOS\ue_scripts")
-import pcg_utils as pcg; importlib.reload(pcg)
-pcg.ueos_pcg_quick_setup(
-    mesh_paths=["/Game/Meshes/SM_Oak", "/Game/Meshes/SM_Pine"],
-    save_path="/Game/PCG", biome_name="ForestBiome"
-)
-# Creates PCGGraph with surface sampler + spawner + density filter,
-# places PCGVolume in level, and triggers generation
-```
-
----
-
-### 🎮 Enhanced Input Tools (18) — Phase 7
+### 💥 Chaos Physics Tools (25)
 
 | Tool | Description |
 |------|-------------|
-| `inp_create_input_action` | Create an InputAction asset (value type: bool/axis1D/axis2D/axis3D) |
-| `inp_list_input_actions` | List all InputAction assets under a content path |
-| `inp_get_action_info` | Inspect triggers, modifiers, and value type of an InputAction |
-| `inp_set_action_triggers` | Set triggers on an InputAction (pressed/released/hold/tap/pulse) |
-| `inp_add_action_modifier` | Add a modifier to an InputAction (dead_zone/negate/scale/smooth/swizzle) |
-| `inp_create_mapping_context` | Create an InputMappingContext asset |
-| `inp_list_mapping_contexts` | List all InputMappingContext assets under a content path |
-| `inp_add_key_mapping` | Add a key-to-action mapping in an IMC (with optional modifiers) |
-| `inp_remove_key_mapping` | Remove a key-to-action mapping from an IMC |
-| `inp_get_imc_mappings` | List all key mappings in an InputMappingContext |
-| `inp_add_imc_to_blueprint` | Wire an IMC into a Blueprint's BeginPlay via EnhancedInputSubsystem |
-| `inp_set_default_player_mappings` | Set default IMC + priority on the player controller class |
-| `inp_create_character_input_set` | Preset: create full character IMC (WASD/look/jump/sprint/crouch) |
-| `inp_create_vehicle_input_set` | Preset: create vehicle IMC (throttle/brake/steer/handbrake/camera) |
-| `inp_create_ui_input_set` | Preset: create UI navigation IMC (navigate/confirm/cancel/scroll) |
-| `inp_list_available_keys` | List available input keys by group (gamepad/keyboard/mouse/vr) |
-| `inp_set_project_default_imc` | Set the project-level default IMC in EnhancedInput developer settings |
-| `inp_diagnostics` | Enhanced Input health-check: IMC count, orphan actions, project default |
+| `chaos_create_gc` | Create GeometryCollection from mesh |
+| `chaos_fracture_voronoi` | Voronoi fracture with cell count |
+| `chaos_fracture_uniform` | Uniform grid fracture |
+| `chaos_fracture_radial` | Radial fracture from point |
+| `chaos_fracture_cluster` | Cluster fracture (hierarchical) |
+| `chaos_set_damage_threshold` | Set per-level damage threshold |
+| `chaos_set_mass` | Set mass and density |
+| `chaos_set_collision` | Configure collision profile |
+| `chaos_add_anchor_field` | Add anchor field (static base) |
+| `chaos_add_strain_field` | Add strain field (internal strength) |
+| `chaos_create_cloth` | Create Chaos Cloth component |
+| `chaos_set_cloth_params` | Set cloth stiffness, damping, wind |
+| `chaos_set_cloth_collision` | Add cloth self-collision and world collision |
+| `chaos_create_rb` | Create rigid body simulation |
+| `chaos_place_radial_force` | Place RadialForceActor |
+| `chaos_set_radial_params` | Set force strength, radius, falloff |
+| `chaos_apply_impulse` | Apply impulse to simulated actor |
+| `chaos_apply_force` | Apply continuous force |
+| `chaos_create_constraint` | Create physics constraint joint |
+| `chaos_set_constraint_limits` | Set angular/linear limits |
+| `chaos_simulate_mesh` | Enable physics simulation on StaticMesh |
+| `chaos_set_break_event` | Set on-fracture Blueprint event |
+| `chaos_get_info` | Read GeometryCollection structure |
+| `chaos_list` | List all Chaos assets in path |
+| `chaos_diagnostics` | Chaos simulation diagnostic report |
 
-**Quick Enhanced Input character setup from UE Python console:**
-```python
-import sys, importlib
-sys.path.insert(0, r"C:\UEOS\ue_scripts")
-import input_utils as inp; importlib.reload(inp)
-inp.ueos_input_quick_setup("/Game/Input")
-# Creates IA_Move/IA_Look/IA_Jump/IA_Sprint/IA_Crouch InputActions
-# + IMC_Default with WASD/mouse/gamepad bindings
-# + wires IMC into EnhancedInput project defaults
-```
-
----
-
-### 🔊 MetaSound Tools (17) — Phase 7
+### 🌿 PCG Tools (21)
 
 | Tool | Description |
 |------|-------------|
-| `snd_create_metasound_source` | Create a MetaSoundSource asset (sample rate, channels, one-shot/looping) |
-| `snd_create_metasound_patch` | Create a MetaSoundPatch asset for reusable signal graph fragments |
-| `snd_list_metasounds` | List all MetaSoundSource/Patch assets under a content path |
-| `snd_get_metasound_info` | Inspect parameters, graph node count, and sample rate |
-| `snd_duplicate_metasound` | Duplicate a MetaSound to a new name/location |
-| `snd_add_parameter` | Add an exposed input parameter (float/bool/trigger/wave/int) |
-| `snd_list_parameters` | List all exposed parameters on a MetaSound asset |
-| `snd_create_simple_tone` | Preset builder: sine-wave tone source with Frequency + Volume params |
-| `snd_create_wave_player` | Preset builder: WavePlayer source with wave asset + pitch/volume params |
-| `snd_create_randomised_source` | Preset builder: randomised pitch+volume wave player (footsteps/impacts) |
-| `snd_create_attenuation` | Create a SoundAttenuation asset (inner radius, falloff, spatialisation) |
-| `snd_list_attenuations` | List all SoundAttenuation assets under a content path |
-| `snd_create_modulator_lfo` | Create a SoundModulatorLFO asset (frequency, amplitude, waveform) |
-| `snd_create_control_bus` | Create a SoundControlBus (mix bus for volume/pitch group control) |
-| `snd_create_sound_class` | Create a SoundClass asset (volume, pitch, concurrency settings) |
-| `snd_assign_to_audio_component` | Assign a MetaSoundSource to an AudioComponent on a level actor |
-| `snd_diagnostics` | MetaSound health-check: source/patch counts, orphan params, attenuations |
+| `pcg_create_graph` | Create PCG Graph asset |
+| `pcg_add_surface_sampler` | Add surface point sampler |
+| `pcg_add_mesh_sampler` | Add mesh surface sampler |
+| `pcg_add_volume_sampler` | Add volume point sampler |
+| `pcg_add_static_mesh_spawner` | Add static mesh spawner node |
+| `pcg_add_actor_spawner` | Add actor spawner node |
+| `pcg_set_density` | Set point density |
+| `pcg_set_scale` | Set min/max scale range |
+| `pcg_add_filter` | Add density/tag/bounds filter |
+| `pcg_add_transform` | Add transform node (offset, jitter) |
+| `pcg_add_attribute_noise` | Add attribute noise to points |
+| `pcg_add_slope_filter` | Filter points by slope angle |
+| `pcg_add_biome_filter` | Filter by painted landscape layer |
+| `pcg_connect` | Connect PCG graph nodes |
+| `pcg_place_volume` | Place PCGVolume in level |
+| `pcg_assign_graph` | Assign PCG graph to volume |
+| `pcg_generate` | Trigger PCG generation |
+| `pcg_clear` | Clear generated PCG output |
+| `pcg_get_info` | Read PCG graph structure |
+| `pcg_list` | List all PCG graphs in path |
+| `pcg_diagnostics` | PCG generation diagnostic report |
 
-**Quick MetaSound audio setup from UE Python console:**
-```python
-import sys, importlib
-sys.path.insert(0, r"C:\UEOS\ue_scripts")
-import metasound_utils as ms; importlib.reload(ms)
-ms.ueos_audio_quick_setup("/Game/Audio")
-# Creates SFX/Music/Ambient SoundClasses + Master SoundControlBus
-# + MS_FootstepBase + MS_ImpactBase randomised sources
-# + ATT_Character and ATT_Ambient attenuations
-```
-
----
-
-### 🚀 Pipeline Tools (8)
+### 🎮 Enhanced Input Tools (18)
 
 | Tool | Description |
 |------|-------------|
-| `tripo_generate_from_text` | Text → 3D model (Tripo API v2) |
-| `tripo_generate_from_image` | Concept art → 3D model |
-| `tripo_get_task_status` | Poll Tripo task progress |
-| `tripo_import_to_unreal` | Download + import model into UE 5.4 |
-| `huanyuan_generate_from_image` | Image → 3D (Huanyuan3D) |
-| `metatailor_rig_character` | Auto-rig + clothing (MetaTailor) |
-| `pipeline_concept_to_character` | **Full pipeline**: image → 3D → rig → Blueprint |
-| `ueos_status` | Check all service connections |
+| `input_create_action` | Create InputAction asset |
+| `input_set_action_type` | Set value type (bool/axis1D/axis2D/axis3D) |
+| `input_add_trigger` | Add trigger (Pressed/Released/Hold/Tap/Pulse) |
+| `input_add_modifier` | Add modifier (DeadZone/Negate/Swizzle/Scale) |
+| `input_create_imc` | Create Input Mapping Context |
+| `input_add_mapping` | Add key binding to IMC |
+| `input_set_mapping_modifiers` | Set modifiers on specific mapping |
+| `input_set_mapping_triggers` | Set triggers on specific mapping |
+| `input_assign_imc` | Assign IMC to PlayerController/Character |
+| `input_build_fps_preset` | Build complete FPS input preset |
+| `input_build_tps_preset` | Build complete TPS input preset |
+| `input_build_topdown_preset` | Build top-down input preset |
+| `input_build_vehicle_preset` | Build vehicle input preset |
+| `input_wire_to_bp` | Wire input actions to Blueprint events |
+| `input_get_info` | Read InputAction/IMC structure |
+| `input_list` | List all Input assets in path |
+| `input_delete` | Delete input asset |
+| `input_diagnostics` | Input binding diagnostic report |
 
-### 🔧 Diagnostics (3)
+### 🔊 MetaSound Tools (17)
 
 | Tool | Description |
 |------|-------------|
-| `ueos_status` | All service connection status + tool counts |
-| `ueos_run_python` | Execute raw Python inside UE 5.4 (with timeout) |
-| `ueos_batch_execute` | Run multiple Python scripts sequentially |
+| `ms_create_source` | Create MetaSound Source asset |
+| `ms_create_patch` | Create MetaSound Patch asset |
+| `ms_add_input` | Add input pin (trigger/float/int/bool/wave) |
+| `ms_add_output` | Add output pin |
+| `ms_add_node` | Add node (oscillator/filter/envelope/delay…) |
+| `ms_connect` | Connect MetaSound nodes |
+| `ms_set_param` | Set parameter default value |
+| `ms_add_random_select` | Add random wave selector node |
+| `ms_add_pitch_shift` | Add pitch shift node |
+| `ms_add_envelope` | Add ADSR envelope |
+| `ms_create_attenuation` | Create SoundAttenuation asset |
+| `ms_set_attenuation` | Configure attenuation shape, falloff, inner/outer radii |
+| `ms_create_class` | Create SoundClass (mix bus) |
+| `ms_create_mix` | Create SoundMix preset |
+| `ms_assign_to_component` | Assign MetaSound to AudioComponent on actor |
+| `ms_get_info` | Read MetaSound graph structure |
+| `ms_list` | List all MetaSound assets in path |
+
+### 🔌 Pipeline Tools (8)
+
+| Tool | Description |
+|------|-------------|
+| `tripo_generate` | Text → 3D model via Tripo API |
+| `tripo_generate_from_image` | Image → 3D model via Tripo API |
+| `tripo_import` | Import generated .glb into UE |
+| `huanyuan_generate` | Image → 3D via Huanyuan3D API |
+| `metatailor_rig` | Auto-rig .fbx with MetaTailor |
+| `metatailor_clothe` | Add clothing to rigged character |
+| `ueos_status` | Full connection health check |
+| `ueos_diagnose` | Raw HTTP diagnostic to UE Remote Control |
+
+### 🔍 Diagnostic Tools (3)
+
+| Tool | Description |
+|------|-------------|
+| `ueos_status` | Connection health for all services |
+| `ueos_diagnose` | Raw HTTP probe to UE port 30010 |
+| `ueos_run_python` | Execute arbitrary Python inside UE editor |
 
 ---
 
-## UE Scripts Utility Library
-
-Pre-built scripts in `ue_scripts/` that run INSIDE the UE editor:
-
-| Script | Public Functions | Purpose |
-|--------|-----------------|---------|
-| `ueos_utils.py` | 40+ | General helpers: assets, BPs, materials, actors, data |
-| `animation_utils.py` | 16 | Locomotion SM, attack pipeline, footsteps, IK |
-| `umg_utils.py` | 18 | Widget builders, HUD presets, style helpers |
-| `sequencer_utils.py` | 14 | Cutscene builder, camera dolly, fade/audio tracks |
-| `editor_widget_utils.py` | 17 | EUW builder, UEOS panel, menus, status bar (Phase 5) |
-| `gas_utils.py` | 17 | GAS scaffold, AttributeSet/Ability/Effect/Cue creators (Phase 6) |
-| `eqs_utils.py` | 15 | EQS query presets (cover/flank/patrol/retreat/attack) (Phase 6) |
-| `navmesh_utils.py` | 16 | NavMesh setup, path queries, nav areas, AI speed (Phase 6) |
-| `chaos_utils.py` | 14 | Chaos GC create/fracture/thresholds, physics material, constraints ← NEW |
-| `pcg_utils.py` | 9 | PCG biome graph, blank graph, place/execute/cleanup volume ← NEW |
-| `input_utils.py` | 9 | Enhanced Input quick setup, create action/IMC, key mappings ← NEW |
-| `metasound_utils.py` | 10 | MetaSound source/footstep/music, attenuation, LFO, sound class ← NEW |
-| `bulk_compile_blueprints.py` | — | Compile all BPs under path |
-| `import_fbx_batch.py` | — | Batch FBX import with full options |
-| `setup_character_bp.py` | — | Complete Character BP with mesh/anim/clothing |
-| `material_instance_factory.py` | — | Batch Material Instance creation |
-| `datatable_batch_ops.py` | — | Merge/export/import/search DataTables |
-| `scene_snapshot.py` | — | Full level JSON snapshot |
-
-**Using from a UEOS tool:**
-```python
-# Load script, prepend to your inline code
-utils = open("C:/UEOS/ue_scripts/ueos_utils.py").read()
-script = utils + "\n" + my_code
-await ue.execute_python(script)
-```
-
----
-
-## Configuration
-
-### .env
-```ini
-# Unreal Engine Remote Control
-UE_REMOTE_CONTROL_HOST=127.0.0.1
-UE_REMOTE_CONTROL_PORT=30010
-
-# 3D Generation APIs
-TRIPO_API_KEY=tsk_xxx
-HUANYUAN_API_KEY=
-METATAILOR_API_KEY=
-
-# Asset temp directory (where downloaded models land before UE import)
-UEOS_ASSET_TEMP_DIR=C:/UEOS/temp
-
-# Logging
-UEOS_LOG_LEVEL=INFO
-```
-
-### Claude Desktop (claude_desktop_config.json)
-```json
-{
-  "mcpServers": {
-    "ueos": {
-      "command": "python",
-      "args": ["C:/UEOS/mcp_server/server.py"],
-      "cwd": "C:/UEOS/mcp_server"
-    }
-  }
-}
-```
-
----
-
-## Data Architecture
-
-| Layer | Technology | Purpose |
-|-------|------------|---------|
-| Transport | HTTP REST port 30010 | Remote Control API |
-| Execution | UE Python Editor Plugin | Asset creation/editing |
-| Output parse | `UEOS_RESULT:` / `UEOS_ERROR:` prefixes | Structured data extraction |
-| Storage | Unreal Content Browser | All assets (.uasset) |
-| Config | `.env` + `python-dotenv` | API keys + config |
-| Secrets | `.env` in `.gitignore` | Never committed |
-
----
-
-## Phase Status
-
-| Phase | Status | Scope | Tools |
-|-------|--------|-------|-------|
-| Phase 1 | ✅ Complete | Blueprint (17), Pipeline (8+3), GUI Launcher | 28 |
-| Phase 2 | ✅ Complete | Material (14), Niagara (20), Inspection (12), Scene (16), Data (15) | 77 |
-| Phase 3 | ✅ Complete | Animation (22): AnimBP, State Machines, BlendSpaces, Montages, IK | 22 |
-| Phase 4 | ✅ Complete | UMG (20), Sequencer (18), Behavior Trees (17) | 55 |
-| **Total** | | | **182** |
-| Phase 5 | ✅ Complete | Editor Utility Widgets (20): dockable UEOS panel, menus, status bar | 20 |
-| **Total** | | | **202** |
-| Phase 6 | ✅ Complete | GAS (20): Abilities, Effects, AttributeSets, Cues · EQS (20): queries, generators, tests · NavMesh (17): paths, areas, links | 57 |
-| **Total** | | | **259** |
-| Phase 7 | ✅ Complete | Chaos Physics (25): GeometryCollections, fracture, cloth, fields · PCG (21): graphs, samplers, spawners, volumes, diagnostics · Enhanced Input (18): actions, IMCs, presets · MetaSounds (17): sources, attenuation, LFO, bus | 81 |
-| **Total** | | | **339** |
-
----
-
-## Example Prompts
+## 💬 Example Prompts
 
 ```
 "Create a Character Blueprint BP_Soldier at /Game/Characters with 
@@ -798,9 +1004,6 @@ UEOS_LOG_LEVEL=INFO
 "Generate a fire particle system NS_Bonfire at /Game/VFX.
  Large intensity, with smoke and embers enabled."
 
-"Scene: add a warm point light 'Campfire_Light' at (0,0,50),
- intensity 2000, temperature 2800K, radius 500cm"
-
 "Full pipeline: take this concept art URL → generate 3D with Tripo →
  rig with MetaTailor → create Character Blueprint BP_Hero at 
  /Game/Characters → compile"
@@ -809,96 +1012,28 @@ UEOS_LOG_LEVEL=INFO
  Add Speed(float), IsFalling(bool), IsAiming(bool) variables.
  Build a locomotion state machine with Idle/Walk/Run/Jump/Fall/Land states."
 
-"Create BlendSpace1D BS1D_Speed for SK_Mannequin_Skeleton.
- Speed axis 0→600. Samples: AS_Idle at 0, AS_Walk at 200, AS_Run at 450."
-
-"Create attack montage AM_SwordSlash_01 from AS_SwordSlash_01.
- Slot: UpperBody. Add sections WindUp(0.1s), HitFrame(0.35s), Recovery(0.7s).
- Add hit-window notify state 0.35→0.55s."
-
-"Create IKRig IK_Mannequin for SK_Mannequin_Skeleton.
- Add foot IK goals: LeftFoot on foot_l, RightFoot on foot_r."
-
-"Build an FPS HUD WBP_PlayerHUD at /Game/UI with health bar, 
- stamina bar, ammo counter, crosshair, and minimap slot."
-
-"Create a Main Menu WBP_MainMenu at /Game/UI/Menus with 
- Play, Settings, and Quit buttons. Use the main_menu preset."
-
-"Create a Level Sequence LS_BossIntro at /Game/Cinematics, 10 seconds, 
- 30fps. Add camera cut track for CineCameraActor_0. Add fade in (1s) 
- and fade out (1s). Add background music from /Game/Audio/Boss_Theme."
-
-"Create a complete AI character: BP_Guard with AIController, 
- Blackboard with TargetActor/PatrolTarget/bIsAlerted keys, 
- and a patrol BehaviorTree at /Game/AI."
-
-"Build a patrol Behavior Tree BT_Guard at /Game/AI.
- Blackboard: /Game/AI/BB_Guard.
- Patrol waypoints with random wait, alert on sight with MoveTo chase."
-
-"Create the UEOS control panel"
-
-"Add a custom Tools menu entry 'Compile All BPs' that compiles
- every Blueprint under /Game."
-
-"Create a custom editor tool EUW_LightPlacer at /Game/EditorTools with
- three buttons: Add Point Light, Add Spot Light, Add Directional Light.
- Each button runs the matching scene_ tool on click."
-
-"Build an editor progress panel EUW_ImportStatus at /Game/EditorTools.
- Add a progress bar ImportProgress, a TextBlock StatusLabel,
- and a Cancel button. Open it as a docked tab."
-
-"Post a status bar message: 'UEOS: Importing 42 assets… 67%'
- with progress 0.67."
-
 "Set up the full GAS stack for /Game/Characters/BP_Hero:
  add an AbilitySystemComponent (mixed replication),
  create AS_HeroBase AttributeSet with Health/MaxHealth/Mana/Stamina,
  create GA_FireBolt and GA_Shield abilities, create GE_FireDamage (-30 instant)
  and GE_ShieldBuff (+50 Armor for 10 seconds)."
 
-"Create an EQS query EQS_FindFlankPosition at /Game/AI/EQS.
- Use a Donut generator around the enemy (inner 300, outer 800, 3 rings, 8 points).
- Add a Trace test (must have LoS to enemy) and a Distance filter (min 300, max 800)."
-
-"Create an EQS cover query EQS_TakeCover: SimpleGrid 800 around the querier,
- spacing 80. Add a Trace test: not visible from enemy. Add Distance score: close = better."
-
-"Set up NavMesh for the outdoor level:
- Place a NavMeshBoundsVolume 20000×20000 at center. Set agent radius=42, max step=40.
- Rebuild the navmesh. Then check if (0,0,0) can reach (5000,5000,0)."
-
-"Place a NavLinkProxy jump link from (0,0,0) to (200,0,300) direction both_ways.
- Then run nav diagnostics and report all issues."
-
 "Create a destructible wall: convert SM_BrickWall at /Game/Meshes into a
  GeometryCollection at /Game/Chaos. Voronoi fracture with 30 cells.
- Set level-0 damage threshold to 500. Place the actor at (0, 200, 0)."
+ Set level-0 damage threshold to 500."
 
 "Set up a forest biome PCG graph at /Game/PCG. Use SM_Oak and SM_Pine meshes.
  Surface sampler density 3.0, scale 0.8–1.2. Place a PCGVolume 5000×5000 at
  the world origin and generate it immediately."
 
 "Create a complete Enhanced Input setup for a third-person character at /Game/Input.
- Generate IA_Move (axis2D), IA_Look (axis2D), IA_Jump (bool), IA_Sprint (bool),
- IA_Crouch (bool). Create IMC_Default, bind WASD+mouse+gamepad.
- Wire IMC_Default into BP_ThirdPersonCharacter's BeginPlay."
-
-"Build a MetaSound footstep system at /Game/Audio. Create MS_Footstep_Concrete
- and MS_Footstep_Grass as randomised sources. Set pitch variance ±3 semitones,
- volume variance ±4 dB. Create ATT_Footstep attenuation (inner 100, falloff 600).
- Assign MS_Footstep_Concrete to the AudioComponent on BP_Character."
-
-"Full physics sandbox: create a RadialForce actor at (0,0,500) with strength 8000
- and radius 1200. Simulate physics on SM_Crate_01 at (200,0,0). Then apply a
- 5000N upward impulse on SM_Barrel_01 at (-200,0,0). Run phys_diagnostics.""
+ Generate IA_Move (axis2D), IA_Look (axis2D), IA_Jump (bool), IA_Sprint (bool).
+ Create IMC_Default, bind WASD+mouse+gamepad."
 ```
 
 ---
 
-## File Structure
+## 📁 File Structure
 
 ```
 ueos/
@@ -907,12 +1042,16 @@ ueos/
 ├── .gitignore
 ├── requirements.txt
 ├── README.md
-├── UEOS.bat                    ← Windows double-click launcher
+├── UEOS_SYSTEM_PROMPT.md       ← 74KB behavioral system prompt
+├── UEOS.bat                    ← Daily launcher (double-click after first setup)
+├── SETUP.bat                   ← First-time setup (double-click once)
+├── FIX_CLAUDE_CONFIG.bat       ← Re-write claude_desktop_config.json
+├── INSTALL_BRIDGE.ps1          ← PowerShell bridge installer
 ├── ui/
-│   ├── __init__.py
-│   └── launcher.py             ← 5-tab tkinter GUI (993 lines)
+│   └── launcher.py             ← 5-tab tkinter GUI
 ├── mcp_server/
 │   ├── server.py               ← MCP entry point (339 tools)
+│   ├── ueos.log                ← Runtime log (auto-created)
 │   ├── remote_control/
 │   │   └── client.py           ← UE 5.4 HTTP client w/ retry
 │   ├── api_clients/
@@ -920,49 +1059,59 @@ ueos/
 │   │   ├── huanyuan.py
 │   │   └── metatailor.py
 │   └── tools/
-│       ├── blueprint.py        ← 17 tools ✅
-│       ├── material.py         ← 14 tools ✅
-│       ├── niagara.py          ← 20 tools ✅
-│       ├── inspection.py       ← 12 tools ✅
-│       ├── scene.py            ← 16 tools ✅
-│       ├── data.py             ← 15 tools ✅
-│       ├── animation.py        ← 22 tools ✅ Phase 3
-│       ├── umg.py              ← 20 tools ✅ Phase 4
-│       ├── sequencer.py        ← 18 tools ✅ Phase 4
-│       ├── behavior_tree.py    ← 17 tools ✅ Phase 4
-│       ├── editor_widget.py    ← 20 tools ✅ Phase 5
-│       ├── gameplay_ability.py ← 20 tools ✅ Phase 6
-│       ├── environment_query.py ← 20 tools ✅ Phase 6
-│       ├── navmesh.py          ← 17 tools ✅ Phase 6
-│       ├── chaos_physics.py    ← 25 tools ✅ Phase 7
-│       ├── pcg.py              ← 21 tools ✅ Phase 7
-│       ├── enhanced_input.py   ← 18 tools ✅ Phase 7
-│       └── metasound.py        ← 17 tools ✅ Phase 7
+│       ├── blueprint.py        ← 17 tools
+│       ├── material.py         ← 14 tools
+│       ├── niagara.py          ← 20 tools
+│       ├── inspection.py       ← 12 tools
+│       ├── scene.py            ← 16 tools
+│       ├── data.py             ← 15 tools
+│       ├── animation.py        ← 22 tools  Phase 3
+│       ├── umg.py              ← 20 tools  Phase 4
+│       ├── sequencer.py        ← 18 tools  Phase 4
+│       ├── behavior_tree.py    ← 17 tools  Phase 4
+│       ├── editor_widget.py    ← 20 tools  Phase 5
+│       ├── gameplay_ability.py ← 20 tools  Phase 6
+│       ├── environment_query.py ← 20 tools  Phase 6
+│       ├── navmesh.py          ← 17 tools  Phase 6
+│       ├── chaos_physics.py    ← 25 tools  Phase 7
+│       ├── pcg.py              ← 21 tools  Phase 7
+│       ├── enhanced_input.py   ← 18 tools  Phase 7
+│       └── metasound.py        ← 17 tools  Phase 7
 ├── ue_scripts/                 ← Run INSIDE UE editor
-│   ├── ueos_utils.py           ← 40+ helper functions
-│   ├── animation_utils.py      ← 16 animation helpers ✅ Phase 3
-│   ├── umg_utils.py            ← 18 UMG helpers          ✅ Phase 4
-│   ├── sequencer_utils.py      ← 14 sequencer helpers    ✅ Phase 4
-│   ├── editor_widget_utils.py  ← 17 EUW helpers + panel  ✅ Phase 5
-│   ├── gas_utils.py            ← 17 GAS helpers          ✅ Phase 6
-│   ├── eqs_utils.py            ← 15 EQS helpers          ✅ Phase 6
-│   ├── navmesh_utils.py        ← 16 NavMesh helpers      ✅ Phase 6
-│   ├── chaos_utils.py          ← 14 Chaos helpers        ✅ Phase 7
-│   ├── pcg_utils.py            ← 9  PCG helpers          ✅ Phase 7
-│   ├── input_utils.py          ← 9  Enhanced Input helpers ✅ Phase 7
-│   ├── metasound_utils.py      ← 10 MetaSound helpers    ✅ Phase 7
-│   ├── bulk_compile_blueprints.py
-│   ├── import_fbx_batch.py
-│   ├── setup_character_bp.py
-│   ├── material_instance_factory.py
-│   ├── datatable_batch_ops.py
-│   └── scene_snapshot.py
+│   ├── ueos_utils.py
+│   ├── animation_utils.py
+│   ├── umg_utils.py
+│   ├── sequencer_utils.py
+│   ├── editor_widget_utils.py
+│   ├── gas_utils.py
+│   ├── eqs_utils.py
+│   ├── navmesh_utils.py
+│   ├── chaos_utils.py
+│   ├── pcg_utils.py
+│   ├── input_utils.py
+│   └── metasound_utils.py
 ├── setup/
-│   ├── install.py
-│   └── verify.py
+│   ├── install.py              ← pip install + wizard launcher
+│   ├── configure.py            ← interactive API key wizard
+│   ├── inject_claude_config.py ← auto-writes claude_desktop_config.json
+│   └── inject_ue_settings.py   ← auto-patches UE project settings
 └── config/
-    └── claude_desktop_config.json
+    └── claude_desktop_config.json  ← template (not your live config)
 ```
+
+---
+
+## 📈 Phase History
+
+| Phase | Status | Tools Added | Total |
+|-------|--------|-------------|-------|
+| Phase 1 | ✅ | Blueprint (17), Pipeline (8+3), GUI | 28 |
+| Phase 2 | ✅ | Material (14), Niagara (20), Inspection (12), Scene (16), Data (15) | 105 |
+| Phase 3 | ✅ | Animation (22) | 127 |
+| Phase 4 | ✅ | UMG (20), Sequencer (18), Behavior Trees (17) | 182 |
+| Phase 5 | ✅ | Editor Utility Widgets (20) | 202 |
+| Phase 6 | ✅ | GAS (20), EQS (20), NavMesh (17) | 259 |
+| Phase 7 | ✅ | Chaos Physics (25), PCG (21), Enhanced Input (18), MetaSounds (17) | 339 |
 
 ---
 
