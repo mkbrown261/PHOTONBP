@@ -62,7 +62,13 @@ class PhotonExecBridge(unreal.Object):
         sys.stderr = buf
         err_msg = None
         try:
-            exec(script, {"unreal": unreal})  # noqa: S102
+            # Inject both 'unreal' and 'json' so probe scripts never need to
+            # "import unreal" (which could reset sys.stdout via UE hooks) or
+            # "import json" (harmless but redundant).  Any script that does
+            # "import unreal" will shadow this injected binding — safe because
+            # unreal is already in sys.modules and won't re-run module code.
+            import json as _json_mod
+            exec(script, {"unreal": unreal, "json": _json_mod})  # noqa: S102
         except Exception:
             err_msg = traceback.format_exc()
         finally:
