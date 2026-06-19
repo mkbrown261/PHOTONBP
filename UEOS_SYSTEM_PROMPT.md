@@ -1,5 +1,5 @@
 # UEOS — Unreal Engine Operating System
-## System Prompt v2.6 | UE 5.4 | Blueprint Architecture + Semantic Search + Vision
+## System Prompt v2.7 | UE 5.4 | Blueprint Architecture + Semantic Search + Vision
 
 ---
 
@@ -1937,4 +1937,128 @@ data_get_enum_values(enum_path="/Game/Enums/E_CombatChain")
 **If the enum has 0 values after creation**, call `data_add_enum_value` for each value individually — that code path is separate and more robust.
 
 **The fallback for combat state enums if data tools fail**: use a `Name` or `byte` variable instead of an enum. `Name` values ("None", "Light", "Heavy", "Finisher") are readable in the editor and work identically in switch/branch logic. This is not a design compromise — it is the correct Blueprint-native pattern for state that's internal to a component.
+
+---
+
+# CONFIRMED BROKEN APIs — DO NOT CALL THESE
+
+## v2.7: Verified broken in UE 5.4 Python bindings
+
+These calls were tried and failed in live sessions. **Do not retry them. Do not guess alternatives. Use the confirmed replacements.**
+
+### Enum
+
+| ❌ BROKEN — do not call | ✅ USE THIS INSTEAD |
+|------------------------|---------------------|
+| `unreal.UserDefinedEnumEditorUtils.add_enum_entry(enum_asset)` | `enum_asset.set_meta_data(f"DisplayName_NewEnumerator{i}", name)` |
+| `unreal.UserDefinedEnumEditorUtils.set_enum_entry_display_name(...)` | same as above |
+| `unreal.EnumerationFactory()` | `unreal.EnumFactory()` |
+| `enum_asset.insert_enum_entry(idx)` | `set_meta_data` approach |
+| `enum_asset.set_enum_display_name(idx, name)` | `set_meta_data` approach |
+| `enum_asset.add_enum_display_name_override(idx, name)` | `set_meta_data` approach |
+
+### Input / Key binding
+
+| ❌ BROKEN | ✅ USE THIS |
+|-----------|------------|
+| `unreal.InputKey("LeftMouseButton")` | `k = unreal.Key(); k.set_editor_property("key_name", "LeftMouseButton")` |
+| `unreal.Key("LeftMouseButton")` | same as above |
+| `unreal.InputActionFactory()` | `unreal.InputAction_Factory()` (underscore) |
+
+### Blueprint variable types
+
+| ❌ BROKEN type string | ✅ USE THIS |
+|-----------------------|------------|
+| `"class"` | Not supported. Use a direct object ref (`"actor"`, `"character"`, etc.) |
+| `"TSubclassOf<Actor>"` | Not supported. Use object ref. |
+| `"AnimMontage"` (wrong case) | `"animmontage"` |
+| `"ActorComponent"` (wrong case) | `"actorcomponent"` |
+| Any C++ prefix (`UMyClass`, `AMyActor`) | Strip prefix, lowercase: `"myclass"` |
+
+### Python execution
+
+| ❌ BROKEN | Reason |
+|-----------|--------|
+| `unreal.log()` to return data | Goes to Output Log, not captured by bridge. Use `print("UEOS_RESULT:" + ...)` |
+| `unreal.SystemLibrary.get_platform_name()` | Requires WorldContext — errors silently |
+| `bp.function_graphs`, `bp.event_graph`, `bp.ubergraph_pages` | Crashes entire Python script silently |
+| `unreal.EnumLibrary` | Does not exist |
+| `unreal.BlueprintEditorUtils.add_member_variable(...)` | Not exposed to Python — use `PhotonBPLibrary.add_member_variable(...)` |
+
+---
+
+# COMBAT SYSTEM BUILD RULES
+
+## v2.7: Patterns confirmed for BP_ThirdPersonCharacter + AC_CombatComponent + AC_HitboxComponent
+
+### Variable declarations for combat components
+
+Use these exact type strings. No guessing.
+
+```
+AC_CombatComponent variables:
+  bIsEquipped          bool      is_exposed=True
+  bIsAttacking         bool      is_exposed=False
+  bCanCombo            bool      is_exposed=False
+  CurrentComboIndex    int       is_exposed=False
+  ComboChainState      name      is_exposed=False   (values: "None","Light","Heavy","Finisher")
+  EquippedWeaponActor  actor     is_exposed=True
+  LightAttackDamage    float     is_exposed=True     (per-hit — use array of 3 separate vars)
+  HeavyAttackDamage    float     is_exposed=True
+  FinisherDamage       float     is_exposed=True
+  ComboResetTime       float     is_exposed=True     (default: 1.0)
+  MontagePlayRate      float     is_exposed=True     (default: 1.0)
+
+AC_HitboxComponent variables:
+  bHitboxActive        bool      is_exposed=False
+  TraceRadius          float     is_exposed=True     (default: 30.0)
+  TraceLength          float     is_exposed=True     (default: 100.0)
+  TraceDamage          float     is_exposed=True
+  TraceSocketName      name      is_exposed=True     (default: "hand_r")
+  AlreadyHitActors     (list manually — arrays not supported by blueprint_add_variable)
+
+BP_Enemy_Dummy variables:
+  MaxHealth            float     is_exposed=True     (default: 100.0)
+  CurrentHealth        float     is_exposed=True
+  bIsDead              bool      is_exposed=False
+  RespawnDelay         float     is_exposed=True     (default: 3.0)
+```
+
+### Arrays — blueprint_add_variable does NOT support array types
+
+For any array variable (e.g. `LightAttackMontages`, `AlreadyHitActors`), use one of:
+1. **3 separate named variables** (`LightMontage_1`, `LightMontage_2`, `LightMontage_3`) — instance editable, clean, simple
+2. **`ueos_run_python`** to add array variables via PhotonBPLibrary directly with `is_array=True`
+3. Store combo data in a DataTable and look up by combo index — most scalable
+
+### Anim Notifies for combat data
+
+Anim Notify States drive ALL runtime hitbox data. The component only receives events — it does not hardcode timing.
+
+```
+AN_EnableHitbox   — Instant notify — fires at start of hit window
+  Parameters on the notify: TraceRadius(float), TraceLength(float), Damage(float), SocketName(name)
+
+AN_DisableHitbox  — Instant notify — fires at end of hit window
+
+ANS_RotateToEnemy — Notify State — active during lock-on window
+  Begin: store target rotation, start lerping
+  Tick: SetActorRotation toward nearest enemy
+  End: stop rotating
+
+AN_ComboWindowOpen — Instant notify — opens combo input buffer
+AN_ComboWindowClose — Instant notify — closes combo input buffer, resets if not continued
+```
+
+### Component wiring sequence (correct order, no rework)
+
+```
+1. blueprint_add_component(AC_CombatComponent) to BP_ThirdPersonCharacter
+2. blueprint_add_component(AC_HitboxComponent) to BP_ThirdPersonCharacter
+3. blueprint_add_component(AC_CombatComponent) to BP_Enemy_Dummy
+4. Wire IA_LightAttack → CombatComponent.StartLightAttack
+5. Wire IA_HeavyAttack → CombatComponent.StartHeavyAttack
+6. Wire CombatComponent.OnHit event → HitboxComponent.RegisterHit
+7. Wire HitboxComponent.OnDamageDeal → Enemy.TakeDamage
+```
 
