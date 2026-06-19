@@ -44,11 +44,13 @@ UEOS_PREFIXES = (
 )
 
 # UE 5.4 Remote Control API endpoints
-EP_CALL   = "/remote/object/call"
-EP_PROP   = "/remote/object/property"
-EP_BATCH  = "/remote/batch"
-EP_PRESET = "/remote/preset"
-EP_INFO   = "/remote/info"
+EP_CALL      = "/remote/object/call"
+EP_PROP      = "/remote/object/property"
+EP_BATCH     = "/remote/batch"
+EP_PRESET    = "/remote/preset"
+EP_INFO      = "/remote/info"
+EP_SEARCH    = "/remote/search/assets"
+EP_THUMBNAIL = "/remote/object/thumbnail"
 
 # Python script plugin object path (unchanged in 5.4)
 PY_PLUGIN_PATH = "/Script/PythonScriptPlugin.Default__PythonScriptLibrary"
@@ -445,6 +447,51 @@ print("UEOS_EXISTS:" + str(e))
     ) -> list[dict]:
         """Find all assets of a given class in the project."""
         return await self.get_assets_in_path(search_path, recursive=recursive, filter_class=class_name)
+
+    async def search_assets(
+        self,
+        query:         str,
+        class_names:   list[str] | None = None,
+        package_paths: list[str] | None = None,
+        recursive:     bool = True,
+    ) -> list[dict]:
+        """
+        Search for assets using the UE Remote Control /remote/search/assets endpoint.
+
+        UE 5.4 RC performs substring/prefix matching on the asset name against `query`.
+        Returns a list of asset dicts each containing: Name, Class, Path.
+
+        Falls back to an empty list (not an exception) if the endpoint returns nothing,
+        so callers should handle the empty-list case gracefully.
+        """
+        payload = {
+            "Query": query,
+            "Filter": {
+                "ClassNames":                   class_names or [],
+                "PackagePaths":                 package_paths or ["/Game"],
+                "RecursivePaths":               recursive,
+                "RecursiveClasses":             True,
+                "RecursiveClassesExclusionSet": [],
+                "PackageNames":                 [],
+            }
+        }
+        try:
+            result = await self._put(EP_SEARCH, payload)
+            return result.get("Assets", [])
+        except Exception as e:
+            log.warning(f"search_assets query={query!r} failed: {e}")
+            return []
+
+    async def get_asset_thumbnail(self, asset_path: str) -> dict | None:
+        """
+        Fetch the Content Browser thumbnail for an asset via the RC thumbnail endpoint.
+        Returns the raw response dict (contains 'data' / 'mimeType' fields) or None on failure.
+        """
+        try:
+            return await self._put(EP_THUMBNAIL, {"objectPath": asset_path})
+        except Exception as e:
+            log.warning(f"get_asset_thumbnail path={asset_path!r} failed: {e}")
+            return None
 
     # ──────────────────────────────────────────────────────────────────────
     # Level / actor helpers

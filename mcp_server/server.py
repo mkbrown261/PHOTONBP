@@ -92,6 +92,7 @@ from tools.editor_widget      import EditorWidgetTools
 from tools.gameplay_ability   import GameplayAbilityTools
 from tools.environment_query  import EnvironmentQueryTools
 from tools.navmesh            import NavMeshTools
+from tools.search             import SearchTools
 
 # ── API Clients ───────────────────────────────────────────────────────────────
 from api_clients.tripo       import TripoClient
@@ -144,6 +145,7 @@ environment_query_tools  = EnvironmentQueryTools(ue)
 navmesh_tools            = NavMeshTools(ue)
 inspection_tools     = InspectionTools(ue)
 scene_tools      = SceneTools(ue)
+search_tools         = SearchTools(ue)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # MCP Server
@@ -214,6 +216,7 @@ async def list_tools() -> list[types.Tool]:
     tools.extend(await navmesh_tools.get_tool_definitions())            # Phase 6 — 17 tools
     tools.extend(await inspection_tools.get_tool_definitions())  # 12
     tools.extend(await scene_tools.get_tool_definitions())       # 16
+    tools.extend(await search_tools.get_tool_definitions())      # 3 — semantic search
 
     # ── Status / diagnostics ─────────────────────────────────────────────
     tools.append(types.Tool(
@@ -516,6 +519,8 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
             return await inspection_tools.handle(name, arguments)
         elif name.startswith("scene_"):
             return await scene_tools.handle(name, arguments)
+        elif name.startswith("search_"):
+            return await search_tools.handle(name, arguments)
 
         else:
             return [types.TextContent(type="text", text=json.dumps({"error": f"Unknown tool: {name}"}))]
