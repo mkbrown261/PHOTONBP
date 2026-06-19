@@ -211,6 +211,34 @@ public:
 		FString GraphName
 	);
 
+	// ── Component & Interface ────────────────────────────────────────────────
+
+	/**
+	 * Add a component to a Blueprint's SimpleConstructionScript.
+	 * @param Blueprint         The Blueprint asset
+	 * @param ComponentClass    The component class (e.g. UBoxComponent)
+	 * @param ComponentName     Name for the new component
+	 * @return True on success
+	 */
+	UFUNCTION(BlueprintCallable, Category = "PhotonBP|Components")
+	static bool AddComponent(
+		UBlueprint* Blueprint,
+		UClass* ComponentClass,
+		FName ComponentName
+	);
+
+	/**
+	 * Add an interface to a Blueprint.
+	 * @param Blueprint         The Blueprint asset
+	 * @param InterfaceClass    The interface class to implement
+	 * @return True on success
+	 */
+	UFUNCTION(BlueprintCallable, Category = "PhotonBP|Components")
+	static bool AddInterface(
+		UBlueprint* Blueprint,
+		UClass* InterfaceClass
+	);
+
 	// ── UMG Widget Designer ──────────────────────────────────────────────────
 
 	/**

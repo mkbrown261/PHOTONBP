@@ -36,6 +36,8 @@
 #include "Components/VerticalBox.h"
 #include "Components/Overlay.h"
 #include "WidgetBlueprint.h"
+#include "Engine/SimpleConstructionScript.h"
+#include "Engine/SCS_Node.h"
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
@@ -669,4 +671,38 @@ FString UPhotonBPLibrary::AddWidgetToDesigner(
 	// Return a stable identifier: widget name + slot index
 	int32 SlotIndex = Canvas->GetChildrenCount() - 1;
 	return FString::Printf(TEXT("%s:%d"), *WidgetName, SlotIndex);
+}
+
+// ── AddComponent ─────────────────────────────────────────────────────────────
+
+bool UPhotonBPLibrary::AddComponent(UBlueprint* Blueprint, UClass* ComponentClass, FName ComponentName)
+{
+	if (!Blueprint || !ComponentClass) return false;
+	if (!Blueprint->SimpleConstructionScript) return false;
+
+	USCS_Node* NewNode = Blueprint->SimpleConstructionScript->CreateNode(ComponentClass, ComponentName);
+	if (!NewNode) return false;
+
+	Blueprint->SimpleConstructionScript->AddNode(NewNode);
+	FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
+	return true;
+}
+
+// ── AddInterface ──────────────────────────────────────────────────────────────
+
+bool UPhotonBPLibrary::AddInterface(UBlueprint* Blueprint, UClass* InterfaceClass)
+{
+	if (!Blueprint || !InterfaceClass) return false;
+
+	// Check not already implemented
+	for (const FBPInterfaceDescription& Desc : Blueprint->ImplementedInterfaces)
+	{
+		if (Desc.Interface == InterfaceClass) return true; // already there
+	}
+
+	FBPInterfaceDescription NewInterface;
+	NewInterface.Interface = InterfaceClass;
+	Blueprint->ImplementedInterfaces.Add(NewInterface);
+	FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
+	return true;
 }

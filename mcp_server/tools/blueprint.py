@@ -742,13 +742,13 @@ try:
         if comp_class is None:
             print("UEOS_ERROR:Component class not found: {component_class} — tried Engine, UMG, AIModule, NavigationSystem")
         else:
-            comp = unreal.BlueprintEditorLibrary.add_component(bp, comp_class, "{component_name}")
-            if comp:
-                bp.modify()
+            ok = unreal.PhotonBPLibrary.add_component(bp, comp_class, "{component_name}")
+            if ok:
+                unreal.BlueprintEditorLibrary.compile_blueprint(bp)
                 unreal.EditorAssetLibrary.save_asset("{bp_path}")
                 print("UEOS_RESULT:" + json.dumps({{"status": "success", "component": "{component_name}", "class": "{component_class}", "blueprint": "{bp_path}"}}))
             else:
-                print("UEOS_ERROR:add_component returned None for {component_name}")
+                print("UEOS_ERROR:add_component returned False for {component_name}")
 except Exception as e:
     print("UEOS_ERROR:" + traceback.format_exc().replace("\\n", " | "))
 """
@@ -769,10 +769,13 @@ try:
     elif iface is None:
         print("UEOS_ERROR:Interface not found: {interface_path}")
     else:
-        unreal.BlueprintEditorLibrary.add_interface(bp, iface.generated_class())
-        bp.modify()
-        unreal.EditorAssetLibrary.save_asset("{bp_path}")
-        print("UEOS_RESULT:" + json.dumps({{"status": "success", "interface": "{interface_path}", "blueprint": "{bp_path}"}}))
+        ok = unreal.PhotonBPLibrary.add_interface(bp, iface.generated_class())
+        if ok:
+            unreal.BlueprintEditorLibrary.compile_blueprint(bp)
+            unreal.EditorAssetLibrary.save_asset("{bp_path}")
+            print("UEOS_RESULT:" + json.dumps({{"status": "success", "interface": "{interface_path}", "blueprint": "{bp_path}"}}))
+        else:
+            print("UEOS_ERROR:add_interface returned False for {interface_path}")
 except Exception as e:
     print("UEOS_ERROR:" + traceback.format_exc().replace("\\n", " | "))
 """
