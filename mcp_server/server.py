@@ -1178,341 +1178,209 @@ else:
 async def handle_working_tools() -> list[types.TextContent]:  # noqa: C901
     """
     ueos_wt — Working Tools Checker
-    ────────────────────────────────
-    Sends one tiny script per tool group — each is well under UE's input
-    size limit.  Zero side-effects: no assets created, no writes, no calls
-    that modify state.  hasattr() only.
-
-    ROOT CAUSE OF PREVIOUS EMPTY-OUTPUT BUG (fixed here):
-    -------------------------------------------------------
-    The old probes did `import unreal,json` at the top.  The bridge calls
-    exec(script, {"unreal": unreal}) — `unreal` is already injected into the
-    exec globals.  `import unreal` inside exec() re-invokes the UE module init
-    path which resets sys.stdout back to UE's internal logger, so anything
-    printed AFTER that import goes to UE's log and NOT to the StringIO buffer
-    the bridge is capturing.  buf.getvalue() comes back empty.
-
-    A second class of crash: old checks had entries like
-        hasattr(unreal.EditorAssetLibrary, "load_asset")
-    If unreal.EditorAssetLibrary does not exist, that AttributeError fires
-    BEFORE the guarding hasattr() can protect anything, crashing the script
-    with no output.
-
-    Fixes applied to every probe:
-      1. NO `import unreal` — use the `unreal` already in exec globals.
-      2. `import json` only (stdlib, never touches sys.stdout).
-      3. Every attribute check uses getattr(unreal,"X",None) first, then
-         hasattr(obj,"method") if obj else False.
+    Runs ALL checks in a SINGLE exec() call — one HTTP round-trip, no timeout risk.
     """
+    # One script. All 9 groups. Prints one line per group: PASS:<g> or FAIL:<g>:<json>
+    # NO `import unreal` — unreal is pre-injected by the bridge.
+    # Every attribute access uses getattr(unreal,"X",None) — never unreal.X directly.
+    SCRIPT = (
+        "import json\n"
+        "def chk(group, pairs):\n"
+        "    bad=[k for k,v in pairs if not v]\n"
+        "    print('PASS:'+group if not bad else 'FAIL:'+group+':'+json.dumps(bad))\n"
+        "\n"
+        "eal=getattr(unreal,'EditorAssetLibrary',None)\n"
+        "ath=getattr(unreal,'AssetToolsHelpers',None)\n"
+        "sl=getattr(unreal,'SystemLibrary',None)\n"
+        "pa=getattr(unreal,'Paths',None)\n"
+        "chk('core',[\n"
+        "  ('EditorAssetLibrary',eal is not None),\n"
+        "  ('EAL.load_asset',hasattr(eal,'load_asset') if eal else False),\n"
+        "  ('EAL.does_asset_exist',hasattr(eal,'does_asset_exist') if eal else False),\n"
+        "  ('EAL.save_asset',hasattr(eal,'save_asset') if eal else False),\n"
+        "  ('AssetToolsHelpers',ath is not None),\n"
+        "  ('ATH.get_asset_tools',hasattr(ath,'get_asset_tools') if ath else False),\n"
+        "  ('SL.get_engine_version',hasattr(sl,'get_engine_version') if sl else False),\n"
+        "  ('Paths.get_project_file_path',hasattr(pa,'get_project_file_path') if pa else False),\n"
+        "])\n"
+        "\n"
+        "pbp=getattr(unreal,'PhotonBPLibrary',None)\n"
+        "bel=getattr(unreal,'BlueprintEditorLibrary',None)\n"
+        "chk('blueprint',[\n"
+        "  ('BlueprintFactory',getattr(unreal,'BlueprintFactory',None) is not None),\n"
+        "  ('BlueprintEditorLibrary',bel is not None),\n"
+        "  ('BEL.compile_blueprint',hasattr(bel,'compile_blueprint') if bel else False),\n"
+        "  ('BEL.add_function_graph',hasattr(bel,'add_function_graph') if bel else False),\n"
+        "  ('BEL.add_component',hasattr(bel,'add_component') if bel else False),\n"
+        "  ('BEL.add_interface',hasattr(bel,'add_interface') if bel else False),\n"
+        "  ('PhotonBPLibrary',pbp is not None),\n"
+        "  ('PBP.add_member_variable',hasattr(pbp,'add_member_variable') if pbp else False),\n"
+        "  ('PBP.add_struct_field',hasattr(pbp,'add_struct_field') if pbp else False),\n"
+        "  ('PBP.connect_pins',hasattr(pbp,'connect_pins') if pbp else False),\n"
+        "  ('PBP.get_graph_nodes',hasattr(pbp,'get_graph_nodes') if pbp else False),\n"
+        "  ('PBP.add_custom_event',hasattr(pbp,'add_custom_event') if pbp else False),\n"
+        "  ('PBP.add_event_node',hasattr(pbp,'add_event_node') if pbp else False),\n"
+        "  ('PBP.add_function_call_node',hasattr(pbp,'add_function_call_node') if pbp else False),\n"
+        "  ('PBP.add_variable_get_node',hasattr(pbp,'add_variable_get_node') if pbp else False),\n"
+        "  ('PBP.add_variable_set_node',hasattr(pbp,'add_variable_set_node') if pbp else False),\n"
+        "  ('PBP.set_pin_default_value',hasattr(pbp,'set_pin_default_value') if pbp else False),\n"
+        "  ('PBP.add_widget_to_designer',hasattr(pbp,'add_widget_to_designer') if pbp else False),\n"
+        "  ('PBP.add_event_dispatcher',hasattr(pbp,'add_event_dispatcher') if pbp else False),\n"
+        "  ('PBP.set_variable_flags',hasattr(pbp,'set_variable_flags') if pbp else False),\n"
+        "])\n"
+        "\n"
+        "ude=getattr(unreal,'UserDefinedEnum',None)\n"
+        "dtf=getattr(unreal,'DataTableFunctionLibrary',None)\n"
+        "chk('data',[\n"
+        "  ('StructureFactory',getattr(unreal,'StructureFactory',None) is not None),\n"
+        "  ('UserDefinedStruct',getattr(unreal,'UserDefinedStruct',None) is not None),\n"
+        "  ('EnumFactory',getattr(unreal,'EnumFactory',None) is not None),\n"
+        "  ('UserDefinedEnum',ude is not None),\n"
+        "  ('UDE.num_enums',hasattr(ude,'num_enums') if ude else False),\n"
+        "  ('UDE.set_meta_data',hasattr(ude,'set_meta_data') if ude else False),\n"
+        "  ('DataTableFactory',getattr(unreal,'DataTableFactory',None) is not None),\n"
+        "  ('DataTable',getattr(unreal,'DataTable',None) is not None),\n"
+        "  ('DataTableFunctionLibrary',dtf is not None),\n"
+        "  ('DTF.get_data_table_row_names',hasattr(dtf,'get_data_table_row_names') if dtf else False),\n"
+        "  ('DTF.fill_data_table_from_csv_string',hasattr(dtf,'fill_data_table_from_csv_string') if dtf else False),\n"
+        "  ('DTF.conv_data_table_to_json_string',hasattr(dtf,'conv_data_table_to_json_string') if dtf else False),\n"
+        "  ('TFieldIterator',getattr(unreal,'TFieldIterator',None) is not None),\n"
+        "  ('StructureEditorUtils_ABSENT',getattr(unreal,'StructureEditorUtils',None) is None),\n"
+        "])\n"
+        "\n"
+        "ell=getattr(unreal,'EditorLevelLibrary',None)\n"
+        "chk('scene',[\n"
+        "  ('EditorLevelLibrary',ell is not None),\n"
+        "  ('ELL.spawn_actor_from_class',hasattr(ell,'spawn_actor_from_class') if ell else False),\n"
+        "  ('ELL.get_all_level_actors',hasattr(ell,'get_all_level_actors') if ell else False),\n"
+        "  ('ELL.save_current_level',hasattr(ell,'save_current_level') if ell else False),\n"
+        "  ('ELL.get_editor_world',hasattr(ell,'get_editor_world') if ell else False),\n"
+        "  ('StaticMeshActor',getattr(unreal,'StaticMeshActor',None) is not None),\n"
+        "  ('PointLight',getattr(unreal,'PointLight',None) is not None),\n"
+        "  ('DirectionalLight',getattr(unreal,'DirectionalLight',None) is not None),\n"
+        "  ('SkyAtmosphere',getattr(unreal,'SkyAtmosphere',None) is not None),\n"
+        "  ('ExponentialHeightFog',getattr(unreal,'ExponentialHeightFog',None) is not None),\n"
+        "])\n"
+        "\n"
+        "abl=getattr(unreal,'AnimBlueprintEditorLibrary',None)\n"
+        "chk('animation',[\n"
+        "  ('AnimBlueprintFactory',getattr(unreal,'AnimBlueprintFactory',None) is not None),\n"
+        "  ('AnimBlueprint',getattr(unreal,'AnimBlueprint',None) is not None),\n"
+        "  ('AnimBlueprintEditorLibrary',abl is not None),\n"
+        "  ('ABL.get_anim_graph',hasattr(abl,'get_anim_graph') if abl else False),\n"
+        "  ('ABL.add_anim_graph_node',hasattr(abl,'add_anim_graph_node') if abl else False),\n"
+        "  ('ABL.add_state_to_state_machine',hasattr(abl,'add_state_to_state_machine') if abl else False),\n"
+        "  ('AnimationEditorLibrary',getattr(unreal,'AnimationEditorLibrary',None) is not None),\n"
+        "  ('AnimMontage',getattr(unreal,'AnimMontage',None) is not None),\n"
+        "  ('AnimMontageFactory',getattr(unreal,'AnimMontageFactory',None) is not None),\n"
+        "])\n"
+        "\n"
+        "chk('umg',[\n"
+        "  ('WidgetBlueprintFactory',getattr(unreal,'WidgetBlueprintFactory',None) is not None),\n"
+        "  ('WidgetBlueprint',getattr(unreal,'WidgetBlueprint',None) is not None),\n"
+        "  ('PBP.add_widget_to_designer',hasattr(pbp,'add_widget_to_designer') if pbp else False),\n"
+        "  ('SlateFontInfo',getattr(unreal,'SlateFontInfo',None) is not None),\n"
+        "  ('SlateColor',getattr(unreal,'SlateColor',None) is not None),\n"
+        "  ('SlateBrush',getattr(unreal,'SlateBrush',None) is not None),\n"
+        "  ('ButtonStyle',getattr(unreal,'ButtonStyle',None) is not None),\n"
+        "])\n"
+        "\n"
+        "mel=getattr(unreal,'MaterialEditingLibrary',None)\n"
+        "chk('material',[\n"
+        "  ('Material',getattr(unreal,'Material',None) is not None),\n"
+        "  ('MaterialEditingLibrary',mel is not None),\n"
+        "  ('MEL.get_material_expressions',hasattr(mel,'get_material_expressions') if mel else False),\n"
+        "  ('MEL.create_material_expression',hasattr(mel,'create_material_expression') if mel else False),\n"
+        "  ('MEL.connect_material_expressions',hasattr(mel,'connect_material_expressions') if mel else False),\n"
+        "  ('MEL.recompile_material',hasattr(mel,'recompile_material') if mel else False),\n"
+        "  ('MaterialInstanceConstant',getattr(unreal,'MaterialInstanceConstant',None) is not None),\n"
+        "  ('MaterialExpressionTextureSample',getattr(unreal,'MaterialExpressionTextureSample',None) is not None),\n"
+        "  ('MaterialExpressionScalarParameter',getattr(unreal,'MaterialExpressionScalarParameter',None) is not None),\n"
+        "])\n"
+        "\n"
+        "chk('enhanced_input',[\n"
+        "  ('InputAction',getattr(unreal,'InputAction',None) is not None),\n"
+        "  ('InputMappingContext',getattr(unreal,'InputMappingContext',None) is not None),\n"
+        "  ('InputActionFactory',getattr(unreal,'InputActionFactory',None) is not None),\n"
+        "  ('InputMappingContextFactory',getattr(unreal,'InputMappingContextFactory',None) is not None),\n"
+        "  ('EnhancedInputLibrary',getattr(unreal,'EnhancedInputLibrary',None) is not None),\n"
+        "])\n"
+        "\n"
+        "chk('niagara_seq_bt_pcg',[\n"
+        "  ('NiagaraSystem',getattr(unreal,'NiagaraSystem',None) is not None),\n"
+        "  ('NiagaraEmitter',getattr(unreal,'NiagaraEmitter',None) is not None),\n"
+        "  ('LevelSequence',getattr(unreal,'LevelSequence',None) is not None),\n"
+        "  ('LevelSequenceEditorBlueprintLibrary',getattr(unreal,'LevelSequenceEditorBlueprintLibrary',None) is not None),\n"
+        "  ('SequencerTools',getattr(unreal,'SequencerTools',None) is not None),\n"
+        "  ('BehaviorTree',getattr(unreal,'BehaviorTree',None) is not None),\n"
+        "  ('BehaviorTreeFactory',getattr(unreal,'BehaviorTreeFactory',None) is not None),\n"
+        "  ('BlackboardData',getattr(unreal,'BlackboardData',None) is not None),\n"
+        "  ('PCGGraph',getattr(unreal,'PCGGraph',None) is not None),\n"
+        "])\n"
+    )
 
-    # ── Probe scripts ─────────────────────────────────────────────────────────
-    # Rules enforced in every probe:
-    #   * NO `import unreal`  — unreal is pre-injected into exec globals by bridge.
-    #   * `import json` is safe — pure stdlib, never resets sys.stdout.
-    #   * NEVER write `unreal.X.method` directly — always getattr(unreal,"X",None).
-    #   * Each script prints exactly ONE line: PASS:<g> or FAIL:<g>:<json>
-    # ──────────────────────────────────────────────────────────────────────────
-
-    def _probe(lines):
-        """Join a list of source lines into a single script string."""
-        return "\n".join(lines) + "\n"
-
-    PROBES = [
-
-        # ── core ──────────────────────────────────────────────────────────────
-        ("core", _probe([
-            "import json",
-            "b=[]",
-            "eal=getattr(unreal,'EditorAssetLibrary',None)",
-            "ath=getattr(unreal,'AssetToolsHelpers',None)",
-            "sl=getattr(unreal,'SystemLibrary',None)",
-            "pa=getattr(unreal,'Paths',None)",
-            "checks=[",
-            "('EditorAssetLibrary',eal is not None),",
-            "('EAL.load_asset',hasattr(eal,'load_asset') if eal else False),",
-            "('EAL.does_asset_exist',hasattr(eal,'does_asset_exist') if eal else False),",
-            "('EAL.save_asset',hasattr(eal,'save_asset') if eal else False),",
-            "('AssetToolsHelpers',ath is not None),",
-            "('ATH.get_asset_tools',hasattr(ath,'get_asset_tools') if ath else False),",
-            "('SL.get_engine_version',hasattr(sl,'get_engine_version') if sl else False),",
-            "('Paths.get_project_file_path',hasattr(pa,'get_project_file_path') if pa else False),",
-            "]",
-            "[b.append(k) for k,v in checks if not v]",
-            "print('PASS:core' if not b else 'FAIL:core:'+json.dumps(b))",
-        ])),
-
-        # ── blueprint ─────────────────────────────────────────────────────────
-        ("blueprint", _probe([
-            "import json",
-            "b=[]",
-            "pbp=getattr(unreal,'PhotonBPLibrary',None)",
-            "bpf=getattr(unreal,'BlueprintFactory',None)",
-            "bel=getattr(unreal,'BlueprintEditorLibrary',None)",
-            "checks=[",
-            "('BlueprintFactory',bpf is not None),",
-            "('BlueprintEditorLibrary',bel is not None),",
-            "('BEL.compile_blueprint',hasattr(bel,'compile_blueprint') if bel else False),",
-            "('BEL.add_function_graph',hasattr(bel,'add_function_graph') if bel else False),",
-            "('BEL.add_component',hasattr(bel,'add_component') if bel else False),",
-            "('BEL.add_interface',hasattr(bel,'add_interface') if bel else False),",
-            "('PhotonBPLibrary',pbp is not None),",
-            "('PBP.add_member_variable',hasattr(pbp,'add_member_variable') if pbp else False),",
-            "('PBP.add_struct_field',hasattr(pbp,'add_struct_field') if pbp else False),",
-            "('PBP.connect_pins',hasattr(pbp,'connect_pins') if pbp else False),",
-            "('PBP.get_graph_nodes',hasattr(pbp,'get_graph_nodes') if pbp else False),",
-            "('PBP.add_custom_event',hasattr(pbp,'add_custom_event') if pbp else False),",
-            "('PBP.add_event_node',hasattr(pbp,'add_event_node') if pbp else False),",
-            "('PBP.add_function_call_node',hasattr(pbp,'add_function_call_node') if pbp else False),",
-            "('PBP.add_variable_get_node',hasattr(pbp,'add_variable_get_node') if pbp else False),",
-            "('PBP.add_variable_set_node',hasattr(pbp,'add_variable_set_node') if pbp else False),",
-            "('PBP.set_pin_default_value',hasattr(pbp,'set_pin_default_value') if pbp else False),",
-            "('PBP.add_widget_to_designer',hasattr(pbp,'add_widget_to_designer') if pbp else False),",
-            "('PBP.add_event_dispatcher',hasattr(pbp,'add_event_dispatcher') if pbp else False),",
-            "('PBP.set_variable_flags',hasattr(pbp,'set_variable_flags') if pbp else False),",
-            "]",
-            "[b.append(k) for k,v in checks if not v]",
-            "print('PASS:blueprint' if not b else 'FAIL:blueprint:'+json.dumps(b))",
-        ])),
-
-        # ── data ──────────────────────────────────────────────────────────────
-        ("data", _probe([
-            "import json",
-            "b=[]",
-            "ude=getattr(unreal,'UserDefinedEnum',None)",
-            "dtf=getattr(unreal,'DataTableFunctionLibrary',None)",
-            "checks=[",
-            "('StructureFactory',getattr(unreal,'StructureFactory',None) is not None),",
-            "('UserDefinedStruct',getattr(unreal,'UserDefinedStruct',None) is not None),",
-            "('EnumFactory',getattr(unreal,'EnumFactory',None) is not None),",
-            "('UserDefinedEnum',ude is not None),",
-            "('UDE.num_enums',hasattr(ude,'num_enums') if ude else False),",
-            "('UDE.set_meta_data',hasattr(ude,'set_meta_data') if ude else False),",
-            "('UDE.get_display_name_text_by_index',hasattr(ude,'get_display_name_text_by_index') if ude else False),",
-            "('DataTableFactory',getattr(unreal,'DataTableFactory',None) is not None),",
-            "('DataTable',getattr(unreal,'DataTable',None) is not None),",
-            "('DataTableFunctionLibrary',dtf is not None),",
-            "('DTF.get_data_table_row_names',hasattr(dtf,'get_data_table_row_names') if dtf else False),",
-            "('DTF.fill_data_table_from_csv_string',hasattr(dtf,'fill_data_table_from_csv_string') if dtf else False),",
-            "('DTF.conv_data_table_to_json_string',hasattr(dtf,'conv_data_table_to_json_string') if dtf else False),",
-            "('DataTableImportOptions',getattr(unreal,'DataTableImportOptions',None) is not None),",
-            "('CSVImportType',getattr(unreal,'CSVImportType',None) is not None),",
-            "('TFieldIterator',getattr(unreal,'TFieldIterator',None) is not None),",
-            "('StructureEditorUtils_ABSENT',getattr(unreal,'StructureEditorUtils',None) is None),",
-            "]",
-            "[b.append(k) for k,v in checks if not v]",
-            "print('PASS:data' if not b else 'FAIL:data:'+json.dumps(b))",
-        ])),
-
-        # ── scene ─────────────────────────────────────────────────────────────
-        ("scene", _probe([
-            "import json",
-            "b=[]",
-            "ell=getattr(unreal,'EditorLevelLibrary',None)",
-            "checks=[",
-            "('EditorLevelLibrary',ell is not None),",
-            "('ELL.spawn_actor_from_class',hasattr(ell,'spawn_actor_from_class') if ell else False),",
-            "('ELL.get_all_level_actors',hasattr(ell,'get_all_level_actors') if ell else False),",
-            "('ELL.save_current_level',hasattr(ell,'save_current_level') if ell else False),",
-            "('ELL.get_editor_world',hasattr(ell,'get_editor_world') if ell else False),",
-            "('StaticMeshActor',getattr(unreal,'StaticMeshActor',None) is not None),",
-            "('PointLight',getattr(unreal,'PointLight',None) is not None),",
-            "('DirectionalLight',getattr(unreal,'DirectionalLight',None) is not None),",
-            "('SkyAtmosphere',getattr(unreal,'SkyAtmosphere',None) is not None),",
-            "('ExponentialHeightFog',getattr(unreal,'ExponentialHeightFog',None) is not None),",
-            "]",
-            "[b.append(k) for k,v in checks if not v]",
-            "print('PASS:scene' if not b else 'FAIL:scene:'+json.dumps(b))",
-        ])),
-
-        # ── animation ─────────────────────────────────────────────────────────
-        ("animation", _probe([
-            "import json",
-            "b=[]",
-            "abl=getattr(unreal,'AnimBlueprintEditorLibrary',None)",
-            "ael=getattr(unreal,'AnimationEditorLibrary',None)",
-            "checks=[",
-            "('AnimBlueprintFactory',getattr(unreal,'AnimBlueprintFactory',None) is not None),",
-            "('AnimBlueprint',getattr(unreal,'AnimBlueprint',None) is not None),",
-            "('AnimBlueprintEditorLibrary',abl is not None),",
-            "('ABL.get_anim_graph',hasattr(abl,'get_anim_graph') if abl else False),",
-            "('ABL.add_anim_graph_node',hasattr(abl,'add_anim_graph_node') if abl else False),",
-            "('ABL.add_state_to_state_machine',hasattr(abl,'add_state_to_state_machine') if abl else False),",
-            "('AnimationEditorLibrary',ael is not None),",
-            "('AnimMontage',getattr(unreal,'AnimMontage',None) is not None),",
-            "('AnimMontageFactory',getattr(unreal,'AnimMontageFactory',None) is not None),",
-            "]",
-            "[b.append(k) for k,v in checks if not v]",
-            "print('PASS:animation' if not b else 'FAIL:animation:'+json.dumps(b))",
-        ])),
-
-        # ── umg ───────────────────────────────────────────────────────────────
-        ("umg", _probe([
-            "import json",
-            "b=[]",
-            "pbp=getattr(unreal,'PhotonBPLibrary',None)",
-            "checks=[",
-            "('WidgetBlueprintFactory',getattr(unreal,'WidgetBlueprintFactory',None) is not None),",
-            "('WidgetBlueprint',getattr(unreal,'WidgetBlueprint',None) is not None),",
-            "('PBP.add_widget_to_designer',hasattr(pbp,'add_widget_to_designer') if pbp else False),",
-            "('SlateFontInfo',getattr(unreal,'SlateFontInfo',None) is not None),",
-            "('SlateColor',getattr(unreal,'SlateColor',None) is not None),",
-            "('SlateBrush',getattr(unreal,'SlateBrush',None) is not None),",
-            "('ButtonStyle',getattr(unreal,'ButtonStyle',None) is not None),",
-            "]",
-            "[b.append(k) for k,v in checks if not v]",
-            "print('PASS:umg' if not b else 'FAIL:umg:'+json.dumps(b))",
-        ])),
-
-        # ── material ──────────────────────────────────────────────────────────
-        ("material", _probe([
-            "import json",
-            "b=[]",
-            "mel=getattr(unreal,'MaterialEditingLibrary',None)",
-            "checks=[",
-            "('Material',getattr(unreal,'Material',None) is not None),",
-            "('MaterialEditingLibrary',mel is not None),",
-            "('MEL.get_material_expressions',hasattr(mel,'get_material_expressions') if mel else False),",
-            "('MEL.create_material_expression',hasattr(mel,'create_material_expression') if mel else False),",
-            "('MEL.connect_material_expressions',hasattr(mel,'connect_material_expressions') if mel else False),",
-            "('MEL.recompile_material',hasattr(mel,'recompile_material') if mel else False),",
-            "('MaterialInstanceConstant',getattr(unreal,'MaterialInstanceConstant',None) is not None),",
-            "('MaterialExpressionTextureSample',getattr(unreal,'MaterialExpressionTextureSample',None) is not None),",
-            "('MaterialExpressionScalarParameter',getattr(unreal,'MaterialExpressionScalarParameter',None) is not None),",
-            "]",
-            "[b.append(k) for k,v in checks if not v]",
-            "print('PASS:material' if not b else 'FAIL:material:'+json.dumps(b))",
-        ])),
-
-        # ── enhanced_input ────────────────────────────────────────────────────
-        ("enhanced_input", _probe([
-            "import json",
-            "b=[]",
-            "checks=[",
-            "('InputAction',getattr(unreal,'InputAction',None) is not None),",
-            "('InputMappingContext',getattr(unreal,'InputMappingContext',None) is not None),",
-            "('InputActionFactory',getattr(unreal,'InputActionFactory',None) is not None),",
-            "('InputMappingContextFactory',getattr(unreal,'InputMappingContextFactory',None) is not None),",
-            "('EnhancedInputLibrary',getattr(unreal,'EnhancedInputLibrary',None) is not None),",
-            "]",
-            "[b.append(k) for k,v in checks if not v]",
-            "print('PASS:enhanced_input' if not b else 'FAIL:enhanced_input:'+json.dumps(b))",
-        ])),
-
-        # ── niagara / sequencer / bt / pcg ────────────────────────────────────
-        ("niagara_seq_bt_pcg", _probe([
-            "import json",
-            "b=[]",
-            "checks=[",
-            "('NiagaraSystem',getattr(unreal,'NiagaraSystem',None) is not None),",
-            "('NiagaraEmitter',getattr(unreal,'NiagaraEmitter',None) is not None),",
-            "('LevelSequence',getattr(unreal,'LevelSequence',None) is not None),",
-            "('LevelSequenceEditorBlueprintLibrary',getattr(unreal,'LevelSequenceEditorBlueprintLibrary',None) is not None),",
-            "('SequencerTools',getattr(unreal,'SequencerTools',None) is not None),",
-            "('BehaviorTree',getattr(unreal,'BehaviorTree',None) is not None),",
-            "('BehaviorTreeFactory',getattr(unreal,'BehaviorTreeFactory',None) is not None),",
-            "('BlackboardData',getattr(unreal,'BlackboardData',None) is not None),",
-            "('PCGGraph',getattr(unreal,'PCGGraph',None) is not None),",
-            "]",
-            "[b.append(k) for k,v in checks if not v]",
-            "print('PASS:niagara_seq_bt_pcg' if not b else 'FAIL:niagara_seq_bt_pcg:'+json.dumps(b))",
-        ])),
-    ]
-
-    # ── Ping UE first — bail fast if bridge is not up ────────────────────────
-    # Each probe uses run_in_executor (blocking thread). With timeout=30 and
-    # 9 probes the worst case is 270 s — long past the MCP client's patience.
-    # A single cheap ping lets us fail in <3 s instead of hanging silently.
-    loop = asyncio.get_event_loop()
+    # ── Single round-trip to UE ───────────────────────────────────────────────
     try:
-        reachable = await loop.run_in_executor(None, ue._re.ping)
-    except Exception:
-        reachable = False
-
-    if not reachable:
+        result = await ue.execute_python(SCRIPT, timeout=30)
+    except Exception as e:
         return [types.TextContent(type="text", text=(
-            "═══════════════════════════════════════════════════════\n"
-            "  ueos_wt — SKIPPED\n"
-            "═══════════════════════════════════════════════════════\n"
-            "  ❌  UE Remote Control not reachable on port 30010.\n"
-            "  Run ueos_diagnose to investigate.\n"
-            "═══════════════════════════════════════════════════════"
+            "ueos_wt: UE not reachable\n"
+            f"Error: {e}\n"
+            "Run ueos_diagnose to investigate."
         ))]
 
-    # ── Run each probe, collect results ───────────────────────────────────────
-    # timeout=10 per probe: bridge round-trips in <1 s when healthy.
-    # 9 probes x 10 s = 90 s worst case — still within MCP client patience.
+    output = result.get("output", "").strip()
+
+    # ── Parse output lines ────────────────────────────────────────────────────
     raw: dict[str, dict] = {}
-    for group, script in PROBES:
-        try:
-            result = await ue.execute_python(script, timeout=10)
-            output = result.get("output", "").strip()
+    for ln in output.split("\n"):
+        ln = ln.strip()
+        if ln.startswith("PASS:"):
+            group = ln[5:]
+            raw[group] = {"ok": True, "broken": []}
+        elif ln.startswith("FAIL:"):
+            parts = ln.split(":", 2)
+            group = parts[1]
+            broken = json.loads(parts[2]) if len(parts) == 3 else ["parse_error"]
+            raw[group] = {"ok": False, "broken": broken}
 
-            # Find the PASS/FAIL sentinel anywhere in the output
-            line = ""
-            for ln in output.split("\n"):
-                ln = ln.strip()
-                if ln.startswith("PASS:") or ln.startswith("FAIL:"):
-                    line = ln
-                    break
+    # If nothing parsed, return raw output so we can see what UE actually said
+    if not raw:
+        return [types.TextContent(type="text", text=(
+            "ueos_wt: no PASS/FAIL lines in output\n"
+            f"Raw output:\n{output[:800] or '(empty)'}"
+        ))]
 
-            if line.startswith("PASS:"):
-                raw[group] = {"ok": True, "broken": []}
-            elif line.startswith("FAIL:"):
-                parts = line.split(":", 2)
-                broken = json.loads(parts[2]) if len(parts) == 3 else ["parse_error"]
-                raw[group] = {"ok": False, "broken": broken}
-            else:
-                # No sentinel — script threw before reaching print().
-                detail = output[:200] if output else "(no output captured)"
-                raw[group] = {"ok": False, "broken": [f"SCRIPT_CRASH: {detail}"]}
-        except Exception as e:
-            raw[group] = {"ok": False, "broken": [f"EXEC_ERROR: {str(e)[:200]}"]}
-
-    # ── RC HTTP endpoint probe — simple /remote/info ping only ──────────────
-    # Avoid call_function/search_assets here — they can hang or throw in ways
-    # that kill the report before it is returned.  The ping already happened
-    # above; just record it as a confirmed pass.
-    rc_probes: dict[str, dict] = {
-        "rc_http_port_30010": {"ok": True, "detail": "reachable (ping passed above)"},
-    }
-
-    # ── Build report ──────────────────────────────────────────────────────
-    ICON = {True: "✅", False: "❌"}
+    # ── Build report ──────────────────────────────────────────────────────────
+    EXPECTED = ["core","blueprint","data","scene","animation",
+                "umg","material","enhanced_input","niagara_seq_bt_pcg"]
+    ICON = {True: "OK", False: "XX"}
     lines = [
-        "═══════════════════════════════════════════════════════",
+        "=======================================================",
         "  ueos_wt — Working Tools Report",
-        "═══════════════════════════════════════════════════════",
+        "=======================================================",
     ]
     all_pass = True
-
-    for group, g in raw.items():
-        ok = g.get("ok", False)
-        broken = g.get("broken", [])
+    for group in EXPECTED:
+        if group not in raw:
+            raw[group] = {"ok": False, "broken": ["NOT_RUN"]}
+        g = raw[group]
+        ok = g["ok"]
         if not ok:
             all_pass = False
-        lines.append(f"  {ICON[ok]} {group.upper()}")
-        if broken:
-            for b in broken:
-                lines.append(f"        ✗ {b}")
+        icon = "OK" if ok else "XX"
+        lines.append(f"  [{icon}] {group.upper()}")
+        for b in g.get("broken", []):
+            lines.append(f"        - {b}")
 
-    lines.append("  ─────────────────────────────────────────────────────")
-    lines.append("  RC HTTP ENDPOINTS")
-    for name, probe in rc_probes.items():
-        ok = probe.get("ok", False)
-        if not ok:
-            all_pass = False
-        lines.append(f"  {ICON[ok]} {name}")
-        lines.append(f"        {probe['detail']}")
-
-    lines.append("═══════════════════════════════════════════════════════")
+    lines.append("=======================================================")
     if all_pass:
-        lines.append("  ✅  ALL CHECKS PASSED")
+        lines.append("  ALL CHECKS PASSED")
     else:
-        lines.append("  ❌  FAILURES DETECTED — broken APIs listed above")
-        lines.append("  • PhotonBPLibrary missing → rebuild plugin + restart UE")
-        lines.append("  • Python class missing → check UE plugin is enabled")
-        lines.append("  • RC endpoint failed → check Remote Control plugin + port 30010")
-    lines.append("═══════════════════════════════════════════════════════")
+        lines.append("  FAILURES DETECTED — broken APIs listed above")
+        lines.append("  XX PhotonBPLibrary -> rebuild plugin + restart UE")
+        lines.append("  XX Python class missing -> check plugin enabled")
+    lines.append("=======================================================")
 
     return [types.TextContent(type="text", text="\n".join(lines))]
 
