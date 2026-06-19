@@ -4,6 +4,7 @@
 #include "Kismet/BlueprintFunctionLibrary.h"
 #include "Engine/Blueprint.h"
 #include "EdGraph/EdGraphPin.h"
+#include "Engine/UserDefinedStruct.h"
 #include "PhotonBPLibrary.generated.h"
 
 UCLASS()
@@ -36,6 +37,26 @@ public:
 		FName VarName,
 		bool bInstanceEditable,
 		bool bExposeOnSpawn
+	);
+
+	// ── Struct Field Creation ────────────────────────────────────────────────
+
+	/**
+	 * Add a typed field to a UserDefinedStruct asset.
+	 * @param Struct                  The UserDefinedStruct asset
+	 * @param FieldName               Name for the new field
+	 * @param PinCategory             e.g. "bool","int","real","string","name","struct","object"
+	 * @param PinSubCategory          e.g. "float","double" (for real), or "" for others
+	 * @param PinSubCategoryObjectPath e.g. "/Script/CoreUObject.Vector" or "" for primitives
+	 * @return True on success
+	 */
+	UFUNCTION(BlueprintCallable, Category = "PhotonBP|Structs")
+	static bool AddStructField(
+		UUserDefinedStruct* Struct,
+		FName FieldName,
+		FString PinCategory,
+		FString PinSubCategory,
+		FString PinSubCategoryObjectPath
 	);
 
 	// ── Node Creation ────────────────────────────────────────────────────────

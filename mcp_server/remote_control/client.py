@@ -334,13 +334,20 @@ try:
 
     proj_name = _parse_name(proj_file)
 
+    # NOTE: unreal.SystemLibrary.get_platform_name() does NOT exist in UE 5.4 Python bindings.
+    # Use unreal.Paths.platform_extension_dir() as a proxy, or just omit the platform field.
+    try:
+        platform = unreal.Paths.platform_extension_dir().strip("/").split("/")[-1] or "Unknown"
+    except Exception:
+        platform = "Unknown"
+
     info = {
         "engineVersion": str(unreal.SystemLibrary.get_engine_version()),
         "projectName":   proj_name,
         "projectFile":   proj_file,
         "projectDir":    proj_dir,
         "contentDir":    content_dir,
-        "platform":      str(unreal.SystemLibrary.get_platform_name()),
+        "platform":      platform,
     }
     print("UEOS_INFO:" + json.dumps(info))
 except Exception as _e:

@@ -15,6 +15,9 @@
 #include "Engine/Blueprint.h"
 #include "UObject/UnrealType.h"
 #include "UObject/UObjectGlobals.h"
+// UserDefinedStruct editing
+#include "UserDefinedStructure/UserDefinedStructEditorData.h"
+#include "Kismet2/StructureEditorUtils.h"
 // UMG designer support
 #include "Blueprint/WidgetTree.h"
 #include "Components/Widget.h"
@@ -111,6 +114,39 @@ static FEdGraphPinType BuildPinType(
 	}
 
 	return PinType;
+}
+
+// ─── AddStructField ───────────────────────────────────────────────────────────
+
+bool UPhotonBPLibrary::AddStructField(
+	UUserDefinedStruct* Struct,
+	FName FieldName,
+	FString PinCategory,
+	FString PinSubCategory,
+	FString PinSubCategoryObjectPath)
+{
+	if (!Struct) return false;
+
+	// Build the pin type
+	FEdGraphPinType PinType = BuildPinType(PinCategory, PinSubCategory, PinSubCategoryObjectPath);
+
+	// Add the variable — FStructureEditorUtils::AddVariable auto-generates a GUID name
+	FStructureEditorUtils::AddVariable(Struct, PinType);
+
+	// Grab the entry that was just appended (it is always Last())
+	TArray<FStructVariableDescription>& VarDesc = FStructureEditorUtils::GetVarDesc(Struct);
+	if (VarDesc.Num() == 0) return false;
+
+	FGuid NewVarGuid = VarDesc.Last().VarGuid;
+
+	// Rename it to the requested name
+	FStructureEditorUtils::RenameVariable(Struct, NewVarGuid, FieldName);
+
+	// Notify the editor that the struct layout changed
+	FStructureEditorUtils::OnStructureChanged(Struct,
+		FStructureEditorUtils::EStructureEditorChangeInfo::AddedVariable);
+
+	return true;
 }
 
 // ─── AddMemberVariable ────────────────────────────────────────────────────────

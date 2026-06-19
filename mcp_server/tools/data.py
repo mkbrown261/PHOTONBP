@@ -426,55 +426,67 @@ class DataTools:
     # STRUCT TOOLS
     # ──────────────────────────────────────────────────────────────────────
 
+    # PhotonBPLibrary default object path — used for all C++ plugin RC calls
+    _PHOTON_OBJ = "/Script/PhotonBP.Default__PhotonBPLibrary"
+
+    async def _rc_add_struct_field(
+        self,
+        struct_path: str,
+        field_name: str,
+        ftype: str,
+    ) -> dict:
+        """
+        Call PhotonBPLibrary.AddStructField via RC HTTP (PUT /remote/object/call).
+        This routes around the missing unreal.StructureEditorUtils Python binding.
+
+        PIN_CATEGORY_MAP maps friendly type names to (PinCategory, PinSubCategoryObjectPath).
+        PinSubCategory is always "" for non-numeric reals; the C++ BuildPinType helper
+        handles float/double sub-category internally when PinCategory=="real".
+        """
+        cat, sub_obj_path = self._pin_info(ftype)
+
+        # For "real" types we pass the sub-category so BuildPinType can pick float vs double
+        sub_cat = ""
+        if ftype in ("float",):
+            sub_cat = "float"
+        elif ftype in ("double",):
+            sub_cat = "double"
+
+        params = {
+            "Struct":                    {"$type": "softobjectpath", "assetPath": struct_path},
+            "FieldName":                 field_name,
+            "PinCategory":               cat,
+            "PinSubCategory":            sub_cat,
+            "PinSubCategoryObjectPath":  sub_obj_path,
+        }
+        return await self.ue.call_function(
+            self._PHOTON_OBJ,
+            "AddStructField",
+            parameters=params,
+            transaction=True,
+        )
+
     async def _create_struct(self, args: dict) -> list[types.TextContent]:
         name        = args["name"]
         path        = args["path"].rstrip("/")
         fields      = args.get("fields", [])
         asset_path  = f"{path}/{name}"
 
-        # Build field-addition code block
-        field_code_lines = []
-        for f in fields:
-            fname     = f["field_name"]
-            ftype     = f.get("type", "string").lower()
-            tooltip   = f.get("tooltip", "")
-            cat, sub  = self._pin_info(ftype)
-            field_code_lines.append(
-                f'    _add_field(struct, "{fname}", "{cat}", "{sub}", "{tooltip}")'
-            )
-        field_code = "\n".join(field_code_lines) if field_code_lines else "    pass  # no initial fields"
-
-        script = f"""
+        # ── Step 1: create the empty struct via Python (always works) ─────────
+        create_script = f"""
 import unreal, json
-
-def _add_field(struct, fname, cat, sub, tooltip=""):
-    pin_type = unreal.EdGraphPinType()
-    pin_type.pin_category = cat
-    if sub:
-        sub_obj = unreal.load_object(None, sub)
-        if sub_obj:
-            pin_type.pin_sub_category_object = sub_obj
-    unreal.StructureEditorUtils.add_variable(struct, pin_type, fname)
 
 asset_path = "{asset_path}"
 
-# ── CRITICAL: check existence FIRST to avoid UE modal dialog ──────────────
-# If the asset already exists, load and return it — never call create_asset
-# on an existing path or UE will freeze with a "replace existing?" modal.
+# CRITICAL: check existence first — never call create_asset on an existing
+# path or UE will freeze on a "replace existing?" modal.
 if unreal.EditorAssetLibrary.does_asset_exist(asset_path):
     struct = unreal.EditorAssetLibrary.load_asset(asset_path)
     if struct and isinstance(struct, unreal.UserDefinedStruct):
-        info = {{
-            "status": "already_exists",
-            "name":   "{name}",
-            "path":   struct.get_path_name(),
-            "fields": {len(fields)}
-        }}
-        print("UEOS_RESULT:" + json.dumps(info))
+        print("UEOS_RESULT:" + json.dumps({{"status":"already_exists","name":"{name}","path":struct.get_path_name()}}))
     else:
         print("UEOS_ERROR:Asset exists at {asset_path} but is not a UserDefinedStruct")
 else:
-    # Make sure the directory exists before creating
     unreal.EditorAssetLibrary.make_directory("{path}")
     asset_tools = unreal.AssetToolsHelpers.get_asset_tools()
     factory = unreal.StructureFactory()
@@ -482,45 +494,70 @@ else:
     if struct is None:
         print("UEOS_ERROR:Failed to create struct {name} at {path}")
     else:
-{field_code}
         unreal.EditorAssetLibrary.save_asset(struct.get_path_name(), only_if_is_dirty=False)
-        info = {{
-            "status": "created",
-            "name":   "{name}",
-            "path":   struct.get_path_name(),
-            "fields": {len(fields)}
-        }}
-        print("UEOS_RESULT:" + json.dumps(info))
+        print("UEOS_RESULT:" + json.dumps({{"status":"created","name":"{name}","path":struct.get_path_name()}}))
 """
-        # Struct creation can be slow — use 90s timeout to avoid premature timeout
-        result = await self._exec(script, timeout=90)
-        return self._ok(result)
+        create_result = await self._exec(create_script, timeout=90)
+        status = create_result.get("status", "")
+        if "error" in create_result or status not in ("created", "already_exists"):
+            return self._ok(create_result)
+
+        # ── Step 2: add each field via PhotonBPLibrary RC call ────────────────
+        added   = []
+        errors  = []
+        for f in fields:
+            fname = f["field_name"]
+            ftype = f.get("type", "string").lower()
+            try:
+                rc_result = await self._rc_add_struct_field(asset_path, fname, ftype)
+                added.append(fname)
+            except Exception as e:
+                errors.append({"field": fname, "error": str(e)})
+
+        # ── Step 3: save after all fields added ───────────────────────────────
+        if added:
+            save_script = f"""
+import unreal
+struct = unreal.EditorAssetLibrary.load_asset("{asset_path}")
+if struct:
+    unreal.EditorAssetLibrary.save_asset(struct.get_path_name(), only_if_is_dirty=False)
+"""
+            await self._exec(save_script, timeout=30)
+
+        return self._ok({
+            "status":        status,
+            "name":          name,
+            "path":          asset_path,
+            "fields_added":  added,
+            "fields_failed": errors,
+        })
 
     async def _add_struct_field(self, args: dict) -> list[types.TextContent]:
         struct_path = args["struct_path"]
         field_name  = args["field_name"]
         ftype       = args.get("type", "string").lower()
-        tooltip     = args.get("tooltip", "")
-        cat, sub    = self._pin_info(ftype)
 
-        script = f"""
-import unreal, json
+        try:
+            rc_result = await self._rc_add_struct_field(struct_path, field_name, ftype)
+        except Exception as e:
+            return self._err(f"AddStructField RC call failed: {e}")
 
+        # Save after adding the field
+        save_script = f"""
+import unreal
 struct = unreal.EditorAssetLibrary.load_asset("{struct_path}")
-if struct is None or not isinstance(struct, unreal.UserDefinedStruct):
-    print("UEOS_ERROR:Struct not found or wrong type: {struct_path}")
-else:
-    pin_type = unreal.EdGraphPinType()
-    pin_type.pin_category = "{cat}"
-    if "{sub}":
-        sub_obj = unreal.load_object(None, "{sub}")
-        if sub_obj:
-            pin_type.pin_sub_category_object = sub_obj
-    unreal.StructureEditorUtils.add_variable(struct, pin_type, "{field_name}")
-    unreal.EditorAssetLibrary.save_asset("{struct_path}", only_if_is_dirty=False)
-    print("UEOS_RESULT:" + json.dumps({{"status":"added","field":"{field_name}","type":"{ftype}","struct":"{struct_path}"}}))
+if struct:
+    unreal.EditorAssetLibrary.save_asset(struct.get_path_name(), only_if_is_dirty=False)
 """
-        return self._ok(await self._exec(script))
+        await self._exec(save_script, timeout=30)
+
+        return self._ok({
+            "status": "added",
+            "field":  field_name,
+            "type":   ftype,
+            "struct": struct_path,
+            "rc":     rc_result,
+        })
 
     async def _get_struct_fields(self, args: dict) -> list[types.TextContent]:
         struct_path = args["struct_path"]
@@ -532,13 +569,17 @@ struct = unreal.EditorAssetLibrary.load_asset("{struct_path}")
 if struct is None or not isinstance(struct, unreal.UserDefinedStruct):
     print("UEOS_ERROR:Struct not found: {struct_path}")
 else:
+    # unreal.StructureEditorUtils.get_variables does NOT exist in UE 5.4 Python.
+    # Iterate the struct's UProperties via the script struct layout instead.
     fields = []
-    for prop in unreal.StructureEditorUtils.get_variables(struct):
-        fields.append({{
-            "name":     prop.var_name.to_display_string(),
-            "type":     str(prop.var_type.pin_category),
-            "sub_type": str(prop.var_type.pin_sub_category) if hasattr(prop.var_type, "pin_sub_category") else ""
-        }})
+    for prop in unreal.TFieldIterator(struct, unreal.FProperty):
+        try:
+            fields.append({{
+                "name":  prop.get_fname().to_string(),
+                "class": prop.get_class().get_name(),
+            }})
+        except Exception:
+            pass
     print("UEOS_RESULT:" + json.dumps({{"struct":"{struct_path}","field_count":len(fields),"fields":fields}}))
 """
         return self._ok(await self._exec(script))
