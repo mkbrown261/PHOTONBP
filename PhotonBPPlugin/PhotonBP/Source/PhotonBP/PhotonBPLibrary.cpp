@@ -45,14 +45,14 @@
 #include "DataTableEditorUtils.h"
 // Material
 #include "Materials/Material.h"
-#include "MaterialEditingLibrary.h"
+#include "Materials/MaterialExpression.h"
 // Animation BP
 #include "Animation/AnimBlueprint.h"
-#include "AnimationGraph/AnimGraphNode_StateMachine.h"
 // Asset tools for factory-based creation
 #include "AssetToolsModule.h"
 #include "IAssetTools.h"
 #include "Factories/Factory.h"
+#include "EditorLoadingAndSavingUtils.h"
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 

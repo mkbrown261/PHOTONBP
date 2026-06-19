@@ -25,6 +25,17 @@ public class PhotonBP : ModuleRules
 			"UMGEditor",
 			"SlateCore",
 			"Slate",
+			// Material editing
+			"MaterialEditor",
+			// Asset tools (CreateAsset)
+			"AssetTools",
+			// DataTable editing
+			"DataTableEditor",
+			// Animation BP
+			"AnimGraph",
+			"AnimGraphRuntime",
+			// Editor save utils
+			"EditorFramework",
 		});
 	}
 }
