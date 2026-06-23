@@ -9,8 +9,8 @@ The bridge object is registered by ue_http_bridge.py which lives in
 the UE project's Content/Python/ folder and loads automatically at
 editor startup.
 
-Confirmed working object path (discovered 2026-06-18):
-    /Engine/PythonTypes.Default__PhotonExecBridge
+Confirmed working object path (discovered 2026-06-23):
+    /Engine/Transient.PhotonExecBridge_0
 
 All tools call execute_python() → this module → UE → stdout captured → returned.
 """
@@ -31,7 +31,7 @@ HTTP_PORT = 30010
 BASE_URL  = f"http://127.0.0.1:{HTTP_PORT}"
 
 # The @unreal.uclass() bridge that executes arbitrary Python and captures stdout
-BRIDGE_OBJECT   = "/Engine/PythonTypes.Default__PhotonExecBridge"
+BRIDGE_OBJECT   = "/Engine/Transient.PhotonExecBridge_0"
 BRIDGE_FUNCTION = "run_script"
 
 # Legacy constants — kept so any old imports don't crash
